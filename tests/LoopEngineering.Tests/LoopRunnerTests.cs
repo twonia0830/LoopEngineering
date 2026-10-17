@@ -17,7 +17,8 @@ public sealed class LoopRunnerTests : IDisposable
         GoalDescription = "Write hello.txt",
         CriteriaText = "hello.txt exists",
         MaxLoops = maxLoops,
-        WorkingDirectories = [_dir]
+        WorkingDirectories = [_dir],
+        UseAgentsMd = false // covered by RepoGuideTests
     };
 
     [Fact]

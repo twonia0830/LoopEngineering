@@ -165,6 +165,29 @@
                 <small class="group-note">Tip: a model from another provider is less likely to share the worker's blind spots.</small>
             </div>
 
+            <div class="model-group">
+                <h3>Repo guide (AGENTS.md)</h3>
+                <label class="inline">
+                    <input type="checkbox" @bind="_config.UseAgentsMd" />
+                    Keep an AGENTS.md in each working folder and give it to every round
+                </label>
+                @if (_config.UseAgentsMd)
+                {
+                    <label class="inline">
+                        <input type="checkbox" @bind="_config.UpdateAgentsMdOnSuccess" />
+                        Update it with durable learnings when the criteria are met
+                    </label>
+                    <small class="group-note">
+                        Missing AGENTS.md files are written before round 1; existing ones are used as they are.
+                        The file is a normal repo file: review and commit it so your team benefits too.
+                    </small>
+                    <ModelPicker Label="Model that writes it" @bind-Model="_config.AgentsMdModel" @bind-Effort="_config.AgentsMdReasoningEffort"
+                                 EmptyLabel="Same as evaluator" EffortEmptyLabel="@(string.IsNullOrWhiteSpace(_config.AgentsMdModel) ? "same as evaluator" : "default")"
+                                 InheritedModel="@(string.IsNullOrWhiteSpace(_config.EvaluatorModel) ? _config.Model : _config.EvaluatorModel)" ShowRefresh="false"
+                                 TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)" />
+                }
+            </div>
+
             <label>Token environment variable
                 <input @bind="_config.TokenEnvironmentVariable" @bind:after="OnTokenVariableChanged" />
                 <small class="@(_tokenFound ? "ok-text" : "err-text")">
@@ -403,7 +426,7 @@
         _errors = _config.Validate();
         RefreshTokenStatus();
         if (!_tokenFound) _errors.Add($"Environment variable '{_config.TokenEnvironmentVariable}' is not set.");
-        foreach (var (role, id) in new[] { ("Worker", _config.Model), ("Evaluator", _config.EvaluatorModel) })
+        foreach (var (role, id) in new[] { ("Worker", _config.Model), ("Evaluator", _config.EvaluatorModel), ("AGENTS.md", _config.UseAgentsMd ? _config.AgentsMdModel : "") })
         {
             if (string.IsNullOrWhiteSpace(id) || Models.Models.Count == 0) continue;
             var model = Models.Find(id);

@@ -43,7 +43,7 @@ public sealed class CreditLedgerTests : IDisposable
             var reported = new List<double?>();
             runner.RoundUsageRecorded += u => reported.Add(u.AiCredits);
 
-            runner.Start(new() { GoalName = "g", GoalDescription = "d", CriteriaText = "c", MaxLoops = 1, WorkingDirectories = [dir] });
+            runner.Start(new() { GoalName = "g", GoalDescription = "d", CriteriaText = "c", MaxLoops = 1, WorkingDirectories = [dir], UseAgentsMd = false });
             await runner.WaitForCompletionAsync();
 
             Assert.Equal([0.75], reported);

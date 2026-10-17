@@ -28,7 +28,7 @@ public sealed class CopilotLoopAgent(LoopConfig config) : ILoopAgent
     {
         if (_client is null) throw new InvalidOperationException("Agent not started.");
 
-        await using var session = await _client.CreateSessionAsync(BuildSessionConfig(request.Phase), cancellationToken);
+        await using var session = await _client.CreateSessionAsync(BuildSessionConfig(request.Phase, request.WorkingDirectory), cancellationToken);
 
         var streamed = new System.Text.StringBuilder();
         using var subscription = session.On<SessionEvent>(evt => HandleEvent(evt, observer, streamed));
@@ -73,12 +73,15 @@ public sealed class CopilotLoopAgent(LoopConfig config) : ILoopAgent
         }
     }
 
-    private SessionConfig BuildSessionConfig(RoundPhase phase)
+    private SessionConfig BuildSessionConfig(RoundPhase phase, string? workingDirectoryOverride)
     {
         var sessionConfig = new SessionConfig
         {
-            WorkingDirectory = config.PrimaryWorkingDirectory,
-            AdditionalDirectories = config.WorkingDirectories.Count > 1 ? [.. config.WorkingDirectories.Skip(1)] : null,
+            WorkingDirectory = workingDirectoryOverride ?? config.PrimaryWorkingDirectory,
+            // A guide session works on one folder only; rounds see all working folders.
+            AdditionalDirectories = workingDirectoryOverride is null && config.WorkingDirectories.Count > 1
+                ? [.. config.WorkingDirectories.Skip(1)]
+                : null,
             OnPermissionRequest = PermissionHandler.ApproveAll,
             Streaming = true,
             IncludeSubAgentStreamingEvents = false,

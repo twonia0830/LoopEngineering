@@ -14,7 +14,8 @@ public interface ILoopAgent : IAsyncDisposable
     Task<string> RunTurnAsync(AgentTurnRequest request, IAgentObserver observer, CancellationToken cancellationToken);
 }
 
-public sealed record AgentTurnRequest(RoundPhase Phase, string Prompt, TimeSpan Timeout);
+/// <param name="WorkingDirectory">Overrides the session's working directory (e.g. the folder a guide is written for).</param>
+public sealed record AgentTurnRequest(RoundPhase Phase, string Prompt, TimeSpan Timeout, string? WorkingDirectory = null);
 
 /// <summary>Receives live activity from a running turn.</summary>
 public interface IAgentObserver

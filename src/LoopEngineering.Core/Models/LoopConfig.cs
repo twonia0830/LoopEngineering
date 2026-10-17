@@ -90,11 +90,36 @@ public sealed class LoopConfig
     /// </summary>
     public string EvaluatorReasoningEffort { get; set; } = "";
 
-    public string ModelFor(RoundPhase phase) =>
-        phase == RoundPhase.Evaluator && !string.IsNullOrWhiteSpace(EvaluatorModel) ? EvaluatorModel : Model;
+    /// <summary>
+    /// Keep an AGENTS.md repo guide in each working folder: create it before round 1 when missing,
+    /// include it in every prompt, and (optionally) update it after the criteria are met.
+    /// </summary>
+    public bool UseAgentsMd { get; set; } = true;
+
+    /// <summary>After a successful run, let an agent add durable knowledge learned during the run to AGENTS.md.</summary>
+    public bool UpdateAgentsMdOnSuccess { get; set; } = true;
+
+    /// <summary>Model that writes AGENTS.md. Empty = same as the evaluator.</summary>
+    public string AgentsMdModel { get; set; } = "";
+
+    /// <summary>Reasoning effort for writing AGENTS.md. Empty = the evaluator's when using its model, else the model default.</summary>
+    public string AgentsMdReasoningEffort { get; set; } = "";
+
+    public string ModelFor(RoundPhase phase) => phase switch
+    {
+        RoundPhase.Guide when !string.IsNullOrWhiteSpace(AgentsMdModel) => AgentsMdModel,
+        RoundPhase.Guide => ModelFor(RoundPhase.Evaluator),
+        RoundPhase.Evaluator when !string.IsNullOrWhiteSpace(EvaluatorModel) => EvaluatorModel,
+        _ => Model
+    };
 
     public string ReasoningEffortFor(RoundPhase phase)
     {
+        if (phase == RoundPhase.Guide)
+        {
+            if (!string.IsNullOrWhiteSpace(AgentsMdReasoningEffort)) return AgentsMdReasoningEffort;
+            return string.IsNullOrWhiteSpace(AgentsMdModel) ? ReasoningEffortFor(RoundPhase.Evaluator) : "";
+        }
         if (phase != RoundPhase.Evaluator) return ReasoningEffort;
         if (!string.IsNullOrWhiteSpace(EvaluatorReasoningEffort)) return EvaluatorReasoningEffort;
         return string.IsNullOrWhiteSpace(EvaluatorModel) ? ReasoningEffort : "";

@@ -33,6 +33,9 @@ public sealed class LoopRunner
     private readonly List<RoundResult> _rounds = [];
     private readonly List<LogEntry> _log = [];
 
+    /// <summary>Usage of the AGENTS.md steps, which run outside the rounds.</summary>
+    private readonly TokenUsage _guideUsage = new();
+
     public LoopRunner(ILoopAgentFactory agentFactory, IGitHubIssueFetcher? issueFetcher = null)
     {
         _agentFactory = agentFactory;
@@ -67,7 +70,7 @@ public sealed class LoopRunner
                 Rounds = _rounds.Select(r => r.Clone()).ToList(),
                 ActiveSubagents = _rounds.LastOrDefault()?.Subagents.Where(s => s.IsRunning).Select(s => s.Clone()).ToList() ?? [],
                 Log = _log.ToList(),
-                TotalUsage = TokenUsage.Sum(_rounds.Select(r => r.Usage))
+                TotalUsage = TotalUsageLocked()
             };
         }
     }
@@ -93,6 +96,7 @@ public sealed class LoopRunner
             _liveOutput.Clear();
             _rounds.Clear();
             _log.Clear();
+            _guideUsage.Reset();
             _progressPath = new ProgressFile(_config.EffectiveProgressDirectory, _config.GoalName).Path;
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
@@ -137,6 +141,8 @@ public sealed class LoopRunner
             await agent.StartAsync(ct);
             AddLog("info", "Copilot runtime started.");
 
+            if (config.UseAgentsMd) await CreateMissingGuidesAsync(agent, config, progress, ct);
+
             for (var round = 1; round <= config.MaxLoops; round++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -160,6 +166,9 @@ public sealed class LoopRunner
                     break;
                 }
             }
+
+            if (finalStatus == RunStatus.CriteriaMet && config.UseAgentsMd && config.UpdateAgentsMdOnSuccess)
+                await UpdateGuidesAsync(agent, config, goalText, progress, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -186,7 +195,7 @@ public sealed class LoopRunner
         }
 
         TokenUsage total;
-        lock (_gate) total = TokenUsage.Sum(_rounds.Select(r => r.Usage));
+        lock (_gate) total = TotalUsageLocked();
 
         try { progress.AppendFinal(finalStatus, roundsRun, endedAt, total); }
         catch (Exception ex) { AddLog("error", $"Could not write progress file: {ex.Message}"); }
@@ -214,14 +223,15 @@ public sealed class LoopRunner
             var goalText = await goal.ResolveAsync(ct);
 
             SetPhase(RoundPhase.Worker, "Worker is running…");
-            var workerPrompt = PromptBuilder.BuildWorkerPrompt(config, goalText, criteria, number, progress.Path, progress.Read());
+            var guides = ReadGuides(config);
+            var workerPrompt = PromptBuilder.BuildWorkerPrompt(config, goalText, criteria, number, progress.Path, progress.Read(), guides);
             var workerOutput = await agent.RunTurnAsync(
                 new AgentTurnRequest(RoundPhase.Worker, workerPrompt, timeout), new Observer(this, result, RoundPhase.Worker), ct);
             lock (_gate) result.WorkerOutput = workerOutput;
 
             SetPhase(RoundPhase.Evaluator, "Evaluator is checking the criteria…");
             AppendLive("\n\n---- evaluator ----\n\n");
-            var evalPrompt = PromptBuilder.BuildEvaluatorPrompt(config, goalText, criteria, number, workerOutput);
+            var evalPrompt = PromptBuilder.BuildEvaluatorPrompt(config, goalText, criteria, number, workerOutput, guides);
             var evalOutput = await agent.RunTurnAsync(
                 new AgentTurnRequest(RoundPhase.Evaluator, evalPrompt, timeout), new Observer(this, result, RoundPhase.Evaluator), ct);
             var evaluation = EvaluationParser.Parse(evalOutput);
@@ -253,6 +263,136 @@ public sealed class LoopRunner
         FinishRound(result, progress, config);
         return result;
     }
+
+    private TokenUsage TotalUsageLocked()
+    {
+        var total = TokenUsage.Sum(_rounds.Select(r => r.Usage));
+        total.Add(_guideUsage);
+        return total;
+    }
+
+    // ---------- AGENTS.md ----------
+
+    private static IReadOnlyList<RepoGuideContent> ReadGuides(LoopConfig config) =>
+        config.UseAgentsMd ? config.WorkingDirectories.Select(RepoGuide.Read).ToList() : [];
+
+    /// <summary>Writes AGENTS.md for every working folder that has none. A failure is logged, never fatal.</summary>
+    private async Task CreateMissingGuidesAsync(ILoopAgent agent, LoopConfig config, ProgressFile progress, CancellationToken ct)
+    {
+        foreach (var folder in config.WorkingDirectories)
+        {
+            var existing = RepoGuide.Read(folder);
+            if (!string.IsNullOrWhiteSpace(existing.AgentsMd))
+            {
+                AddLog("info", $"Using existing {RepoGuide.FileName} in {folder}.");
+                continue;
+            }
+
+            var (reply, usage) = await RunGuideTurnAsync(agent, config, folder,
+                $"Writing {RepoGuide.FileName} for {Path.GetFileName(folder)}…",
+                RepoGuide.BuildCreatePrompt(folder, existing.CopilotInstructions), ct);
+            if (reply is null) continue;
+
+            var content = RepoGuide.ParseReply(reply);
+            if (content is null)
+            {
+                AddLog("warn", $"{RepoGuide.FileName} for {folder}: the reply was not a usable guide; continuing without it.");
+                continue;
+            }
+            if (content.Length > RepoGuide.MaxGuideChars)
+                AddLog("warn", $"{RepoGuide.FileName} for {folder} is long ({content.Length:N0} chars); prompts include only the first {RepoGuide.MaxPromptCharsPerFolder:N0}.");
+
+            TryWriteGuide(folder, content, progress, $"created ({DescribeCost(usage)})");
+        }
+    }
+
+    /// <summary>After success, lets an agent fold durable learnings into each folder's AGENTS.md.</summary>
+    private async Task UpdateGuidesAsync(ILoopAgent agent, LoopConfig config, string goalText, ProgressFile progress, CancellationToken ct)
+    {
+        string runSummary;
+        lock (_gate)
+        {
+            runSummary = string.Join("\n\n", _rounds.Select(r =>
+                $"Round {r.Number}:\n{RepoGuide.ExtractRoundSummary(r.WorkerOutput)}" +
+                (r.Evaluation is { } e ? $"\nEvaluator: {e.Reasoning}" : "")));
+        }
+
+        foreach (var folder in config.WorkingDirectories)
+        {
+            var current = RepoGuide.Read(folder).AgentsMd;
+            if (string.IsNullOrWhiteSpace(current)) continue; // creation failed earlier; nothing to update
+
+            var (reply, usage) = await RunGuideTurnAsync(agent, config, folder,
+                $"Updating {RepoGuide.FileName} for {Path.GetFileName(folder)}…",
+                RepoGuide.BuildUpdatePrompt(folder, current, goalText, runSummary), ct);
+            if (reply is null) continue;
+
+            var content = RepoGuide.ParseReply(reply);
+            if (content is null || content.Trim() == current.Trim())
+            {
+                AddLog("info", $"{RepoGuide.FileName} in {folder}: no changes needed ({DescribeCost(usage)}).");
+                continue;
+            }
+            if (content.Length > RepoGuide.MaxGuideChars && content.Length > current.Length)
+            {
+                AddLog("warn", $"{RepoGuide.FileName} update for {folder} skipped: it would grow to {content.Length:N0} chars (limit {RepoGuide.MaxGuideChars:N0}).");
+                continue;
+            }
+
+            TryWriteGuide(folder, content, progress, $"updated with learnings from this run ({DescribeCost(usage)})");
+        }
+    }
+
+    /// <summary>Runs one guide session in <paramref name="folder"/>. Returns a null reply on failure (logged).</summary>
+    private async Task<(string? Reply, TokenUsage Usage)> RunGuideTurnAsync(
+        ILoopAgent agent, LoopConfig config, string folder, string activity, string prompt, CancellationToken ct)
+    {
+        var holder = new RoundResult { Number = 0, StartedAt = DateTimeOffset.Now };
+        SetPhase(RoundPhase.Guide, activity);
+        AppendLive($"\n\n---- {activity.TrimEnd('…')} ----\n\n");
+        try
+        {
+            var reply = await agent.RunTurnAsync(
+                new AgentTurnRequest(RoundPhase.Guide, prompt, TimeSpan.FromMinutes(config.TurnTimeoutMinutes), folder),
+                new Observer(this, holder, RoundPhase.Guide), ct);
+            return (reply, holder.Usage);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            AddLog("warn", $"{RepoGuide.FileName} step for {folder} failed: {ex.Message}");
+            return (null, holder.Usage);
+        }
+        finally
+        {
+            // Guide steps cost credits too: count them in the run total and the monthly ledger.
+            lock (_gate) _guideUsage.Add(holder.Usage);
+            try { RoundUsageRecorded?.Invoke(holder.Usage.Clone()); }
+            catch (Exception ex) { AddLog("error", $"Could not record usage: {ex.Message}"); }
+            Notify();
+        }
+    }
+
+    private void TryWriteGuide(string folder, string content, ProgressFile progress, string what)
+    {
+        try
+        {
+            RepoGuide.Write(folder, content);
+            AddLog("success", $"{RepoGuide.FileName} {what}: {RepoGuide.PathFor(folder)}");
+            try { progress.AppendNote($"{RepoGuide.FileName} {what}: `{RepoGuide.PathFor(folder)}`"); }
+            catch (IOException) { /* the progress note is best effort */ }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            AddLog("warn", $"Could not write {RepoGuide.PathFor(folder)}: {ex.Message}");
+        }
+    }
+
+    private static string DescribeCost(TokenUsage usage) =>
+        usage.AiCredits is { } credits ? $"{credits:0.###} credits" : $"{TokenUsage.Format(usage.TotalTokens)} tokens";
 
     private void FinishRound(RoundResult result, ProgressFile progress, LoopConfig config)
     {

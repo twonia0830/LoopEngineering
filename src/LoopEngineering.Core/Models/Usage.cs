@@ -67,6 +67,15 @@ public sealed class TokenUsage
         foreach (var (model, calls) in other.Models) Models[model] = Models.GetValueOrDefault(model) + calls;
     }
 
+    public void Reset()
+    {
+        InputTokens = OutputTokens = CacheReadTokens = ReasoningTokens = UserRequests = 0;
+        PremiumRequests = 0;
+        AiCredits = null;
+        ApiCalls = 0;
+        Models.Clear();
+    }
+
     public TokenUsage Clone()
     {
         var copy = (TokenUsage)MemberwiseClone();

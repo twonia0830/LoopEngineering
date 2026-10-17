@@ -126,6 +126,9 @@ public sealed class ProgressFile
         Append($"### Result — {text}\n\nEnded {endedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}{usage}\n");
     }
 
+    /// <summary>One-line note in the current run section (e.g. AGENTS.md created).</summary>
+    public void AppendNote(string note) => Append($"- {note}\n\n");
+
     private static string PhaseLabel(TokenUsage usage) =>
         usage.Models.Count == 0 ? "-" : usage.ModelsLabel + (usage.AiCredits is { } c ? $" ({c:0.###} credits)" : "");
 

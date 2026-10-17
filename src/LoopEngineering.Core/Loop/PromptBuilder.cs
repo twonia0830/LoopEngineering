@@ -8,7 +8,8 @@ public static class PromptBuilder
     /// <summary>Keep the progress history in the prompt bounded; the agent can read the full file itself.</summary>
     public const int MaxProgressChars = 24_000;
 
-    public static string BuildWorkerPrompt(LoopConfig config, string goal, string criteria, int round, string progressPath, string progressContent)
+    public static string BuildWorkerPrompt(LoopConfig config, string goal, string criteria, int round, string progressPath, string progressContent,
+        IReadOnlyList<RepoGuideContent>? guides = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"You are working inside an automated improvement loop. This is round {round} of at most {config.MaxLoops} for the goal \"{config.GoalName}\".");
@@ -19,6 +20,7 @@ public static class PromptBuilder
         sb.AppendLine();
         sb.AppendLine("## Working folders");
         AppendFolders(sb, config);
+        AppendGuides(sb, guides);
         sb.AppendLine();
         sb.AppendLine("## Result criteria (the round is judged against these)");
         sb.AppendLine(criteria.Trim());
@@ -34,6 +36,8 @@ public static class PromptBuilder
         sb.AppendLine("- Address the evaluator's \"next steps\" from the previous round first, if any.");
         sb.AppendLine("- Use available skills and sub-agents when they fit the task.");
         sb.AppendLine("- Do not edit the progress file; the loop controller maintains it.");
+        if (guides is { Count: > 0 })
+            sb.AppendLine($"- Do not edit {RepoGuide.FileName}; it is updated after the run from what you report.");
         sb.AppendLine("- Finish your reply with a section `## Round summary` listing what you changed, how you verified it, and what is still missing.");
         if (!string.IsNullOrWhiteSpace(config.ExtraInstructions))
         {
@@ -44,7 +48,8 @@ public static class PromptBuilder
         return sb.ToString();
     }
 
-    public static string BuildEvaluatorPrompt(LoopConfig config, string goal, string criteria, int round, string workerOutput)
+    public static string BuildEvaluatorPrompt(LoopConfig config, string goal, string criteria, int round, string workerOutput,
+        IReadOnlyList<RepoGuideContent>? guides = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"You are the strict evaluator of round {round} of an automated loop working toward the goal \"{config.GoalName}\".");
@@ -56,6 +61,7 @@ public static class PromptBuilder
         sb.AppendLine();
         sb.AppendLine("## Working folders");
         AppendFolders(sb, config);
+        AppendGuides(sb, guides);
         sb.AppendLine();
         sb.AppendLine("## Result criteria");
         sb.AppendLine(criteria.Trim());
@@ -82,6 +88,28 @@ public static class PromptBuilder
         }
         if (config.WorkingDirectories.Count > 1)
             sb.AppendLine("The goal may require coordinated changes across these folders; keep them consistent with each other.");
+    }
+
+    /// <summary>Embeds each folder's AGENTS.md (and copilot-instructions) so a fresh session starts with a map of the repo.</summary>
+    private static void AppendGuides(StringBuilder sb, IReadOnlyList<RepoGuideContent>? guides)
+    {
+        foreach (var guide in guides ?? [])
+        {
+            if (guide.IsEmpty) continue;
+            sb.AppendLine();
+            sb.AppendLine($"### Repo guide for `{guide.Folder}`");
+            if (!string.IsNullOrWhiteSpace(guide.AgentsMd))
+            {
+                sb.AppendLine($"From {RepoGuide.FileName}:");
+                sb.AppendLine(RepoGuide.Truncate(guide.AgentsMd.Trim(), RepoGuide.MaxPromptCharsPerFolder));
+            }
+            if (!string.IsNullOrWhiteSpace(guide.CopilotInstructions))
+            {
+                sb.AppendLine();
+                sb.AppendLine("From .github/copilot-instructions.md:");
+                sb.AppendLine(RepoGuide.Truncate(guide.CopilotInstructions.Trim(), RepoGuide.MaxPromptCharsPerFolder / 2));
+            }
+        }
     }
 
     private static string Tail(string text, int maxChars) =>

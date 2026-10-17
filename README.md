@@ -71,6 +71,26 @@ There is no context-length setting: Copilot sessions compact automatically (in t
 80% of the model's context window, blocking at 95%). Each round also starts fresh sessions, so a
 prompt only carries the goal, criteria and the tail of the progress file.
 
+## Repo guide (AGENTS.md)
+
+Most work happens in existing repos, and every round starts fresh sessions, so each working folder
+gets an `AGENTS.md`: a short guide to the repo (purpose, layout, build/run/test commands, conventions,
+gotchas) for AI agents and people alike.
+
+1. **Before round 1**, every working folder without an `AGENTS.md` gets one. A read-only session
+   explores the folder and replies with the guide; the app writes the file (the session never edits
+   the repo). An existing `AGENTS.md` is used as it is.
+2. **Every round**, the worker and evaluator prompts include each folder's `AGENTS.md` (and
+   `.github/copilot-instructions.md` if present), re-read from disk. The worker is told not to edit it.
+3. **When the criteria are met** (optional), a short session per folder adds durable knowledge learned
+   during the run, such as new commands, projects or gotchas, or replies `NO_CHANGES`. Task history
+   stays in the progress file. Updates that would push the guide past 12,000 characters are skipped.
+
+The guide is written by the evaluator's model unless you pick another. Its cost shows in the run
+total, the log and the progress file. `AGENTS.md` is an ordinary repo file: review and commit it so
+your team, and tools such as Copilot in VS Code, benefit too. A failed guide step is logged and the
+run continues without it.
+
 ## How a round works
 
 1. Worker prompt = goal (text, file or fetched issues) + working folders + result criteria + the progress file so far (+ extra instructions).

@@ -15,7 +15,10 @@ public enum RoundPhase
 {
     None,
     Worker,
-    Evaluator
+    Evaluator,
+
+    /// <summary>Creating or updating AGENTS.md (outside the rounds).</summary>
+    Guide
 }
 
 public enum RoundStatus
