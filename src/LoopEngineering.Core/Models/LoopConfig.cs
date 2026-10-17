@@ -99,6 +99,15 @@ public sealed class LoopConfig
     /// <summary>After a successful run, let an agent add durable knowledge learned during the run to AGENTS.md.</summary>
     public bool UpdateAgentsMdOnSuccess { get; set; } = true;
 
+    /// <summary>
+    /// Optional file (e.g. flow.md) that tells the AGENTS.md writer where to start reading and which flows
+    /// matter. Exploration begins from the entry points it names instead of guessing.
+    /// </summary>
+    public string AgentsMdStartingPointFile { get; set; } = "";
+
+    /// <summary>Rewrite AGENTS.md even where one exists (the old one is passed along as reference). Meant for one run.</summary>
+    public bool RegenerateAgentsMd { get; set; }
+
     /// <summary>Model that writes AGENTS.md. Empty = same as the evaluator.</summary>
     public string AgentsMdModel { get; set; } = "";
 
@@ -199,6 +208,8 @@ public sealed class LoopConfig
             if (!Directory.Exists(dir)) errors.Add($"Working folder does not exist: {dir}");
         if (WorkingDirectories.Distinct(StringComparer.OrdinalIgnoreCase).Count() != WorkingDirectories.Count)
             errors.Add("The same working folder is listed twice.");
+        if (UseAgentsMd && !string.IsNullOrWhiteSpace(AgentsMdStartingPointFile) && !File.Exists(AgentsMdStartingPointFile))
+            errors.Add($"Starting point file not found: {AgentsMdStartingPointFile}");
         if (!string.IsNullOrWhiteSpace(ProgressDirectory) && !Directory.Exists(ProgressDirectory))
             errors.Add($"Progress folder does not exist: {ProgressDirectory}");
 

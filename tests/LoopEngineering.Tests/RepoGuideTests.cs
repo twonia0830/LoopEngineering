@@ -105,6 +105,57 @@ public sealed class RepoGuideTests : IDisposable
     }
 
     [Fact]
+    public async Task Starting_point_file_guides_the_writer()
+    {
+        var flow = Path.Combine(_b, "flow.md");
+        File.WriteAllText(flow, "# Flow\nStart at `OrderController.Submit`, then `SamplingService.Plan`.");
+        var agent = new GuideAgent(criteriaMet: false);
+        var runner = new LoopRunner(new Factory(agent));
+        var config = Config(_a);
+        config.MaxLoops = 1;
+        config.AgentsMdStartingPointFile = flow;
+
+        runner.Start(config);
+        await runner.WaitForCompletionAsync();
+
+        var prompt = Assert.Single(agent.Turns, t => t.Phase == RoundPhase.Guide).Prompt;
+        Assert.Contains("Start here", prompt);
+        Assert.Contains("Start at `OrderController.Submit`", prompt);
+        Assert.Contains(runner.GetSnapshot().Log, l => l.Message.Contains("starting from flow.md"));
+    }
+
+    [Fact]
+    public async Task Regenerate_rewrites_existing_guide_with_old_one_as_reference()
+    {
+        File.WriteAllText(RepoGuide.PathFor(_a), "# Old guide\n- gotcha: run migrations first\n");
+        var agent = new GuideAgent(criteriaMet: false);
+        var runner = new LoopRunner(new Factory(agent));
+        var config = Config(_a);
+        config.MaxLoops = 1;
+        config.RegenerateAgentsMd = true;
+
+        runner.Start(config);
+        await runner.WaitForCompletionAsync();
+
+        var prompt = Assert.Single(agent.Turns, t => t.Phase == RoundPhase.Guide).Prompt;
+        Assert.Contains("which you are replacing", prompt);
+        Assert.Contains("gotcha: run migrations first", prompt);
+        Assert.Equal("# Guide written for A" + Environment.NewLine, File.ReadAllText(RepoGuide.PathFor(_a)));
+        Assert.Contains(runner.GetSnapshot().Log, l => l.Message.Contains("AGENTS.md regenerated"));
+    }
+
+    [Fact]
+    public void Missing_starting_point_file_blocks_start()
+    {
+        var config = Config(_a);
+        config.AgentsMdStartingPointFile = Path.Combine(_a, "nope.md");
+        Assert.Contains(config.Validate(), e => e.Contains("Starting point file not found"));
+
+        config.UseAgentsMd = false; // irrelevant when the feature is off
+        Assert.DoesNotContain(config.Validate(), e => e.Contains("Starting point"));
+    }
+
+    [Fact]
     public void Guide_model_defaults_to_evaluator()
     {
         var config = Config(_a);

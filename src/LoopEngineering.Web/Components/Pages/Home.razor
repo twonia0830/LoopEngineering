@@ -181,6 +181,17 @@
                         Missing AGENTS.md files are written before round 1; existing ones are used as they are.
                         The file is a normal repo file: review and commit it so your team benefits too.
                     </small>
+                    <label>Starting point file (optional)
+                        <div class="row">
+                            <input @bind="_config.AgentsMdStartingPointFile" placeholder="e.g. flow.md: entry points and main flows" />
+                            <button class="btn small" @onclick="BrowseStartingPoint">Browse…</button>
+                        </div>
+                        <small>The AGENTS.md writer reads this first and traces the code from the entry points it names.</small>
+                    </label>
+                    <label class="inline">
+                        <input type="checkbox" @bind="_config.RegenerateAgentsMd" />
+                        Regenerate AGENTS.md even where it exists (next run only; the old one is kept as reference)
+                    </label>
                     <ModelPicker Label="Model that writes it" @bind-Model="_config.AgentsMdModel" @bind-Effort="_config.AgentsMdReasoningEffort"
                                  EmptyLabel="Same as evaluator" EffortEmptyLabel="@(string.IsNullOrWhiteSpace(_config.AgentsMdModel) ? "same as evaluator" : "default")"
                                  InheritedModel="@(string.IsNullOrWhiteSpace(_config.EvaluatorModel) ? _config.Model : _config.EvaluatorModel)" ShowRefresh="false"
@@ -439,7 +450,14 @@
         {
             Store.Save(_config);
             Quota.TokenVariable = _config.TokenEnvironmentVariable;
-            Runner.Start(_config);
+            Runner.Start(_config); // the runner keeps its own copy of the config
+
+            // Regenerating is a one-off: don't let it rewrite (and lose learnings from) AGENTS.md on every later run.
+            if (_config.RegenerateAgentsMd)
+            {
+                _config.RegenerateAgentsMd = false;
+                Store.Save(_config);
+            }
             _selectedRound = null;
             _progressContent = null;
             _tab = "Live";
@@ -491,6 +509,10 @@
 
     private void BrowseCriteriaFile() =>
         OpenPicker(PathPickerMode.File, "Choose the criteria file", _config.CriteriaFilePath, p => _config.CriteriaFilePath = p);
+
+    private void BrowseStartingPoint() =>
+        OpenPicker(PathPickerMode.File, "Choose the starting point file (e.g. flow.md)", _config.AgentsMdStartingPointFile,
+            p => _config.AgentsMdStartingPointFile = p);
 
     private void BrowseProgressFolder() =>
         OpenPicker(PathPickerMode.Folder, "Choose where to write the progress file", _config.ProgressDirectory, p => _config.ProgressDirectory = p);

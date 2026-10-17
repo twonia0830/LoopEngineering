@@ -86,6 +86,12 @@ gotchas) for AI agents and people alike.
    during the run, such as new commands, projects or gotchas, or replies `NO_CHANGES`. Task history
    stays in the progress file. Updates that would push the guide past 12,000 characters are skipped.
 
+**Starting point file (optional):** point it at a short file such as `flow.md` that names the entry
+points and main flows. The guide writer reads it first and traces the code from there instead of
+guessing where to start, which helps most with large or multi-service systems. **Regenerate** rewrites
+existing guides (for example after adding a starting point file); the old guide is passed along so
+correct facts survive. It applies to the next run only and switches itself off after Start.
+
 The guide is written by the evaluator's model unless you pick another. Its cost shows in the run
 total, the log and the progress file. `AGENTS.md` is an ordinary repo file: review and commit it so
 your team, and tools such as Copilot in VS Code, benefit too. A failed guide step is logged and the

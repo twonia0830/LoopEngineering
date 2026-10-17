@@ -44,12 +44,25 @@ public static partial class RepoGuide
             TryRead(Path.Combine(folder, ".github", "copilot-instructions.md")));
     }
 
-    public static string BuildCreatePrompt(string folder, string? copilotInstructions)
+    /// <param name="startingPoint">A user-written file (e.g. flow.md) naming entry points and key flows; path and content.</param>
+    /// <param name="previousGuide">An existing AGENTS.md being regenerated; kept as reference only.</param>
+    public static string BuildCreatePrompt(string folder, string? copilotInstructions,
+        (string Path, string Content)? startingPoint = null, string? previousGuide = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Explore the repository in `{folder}` and write its {FileName}: a concise guide for AI coding agents (and people) who will work in it.");
         sb.AppendLine("Do NOT modify, create or delete any files. Only read files and run read-only commands (listing, viewing, git log/status). Do not build or run tests.");
         sb.AppendLine();
+        if (startingPoint is { } start)
+        {
+            sb.AppendLine($"## Start here (written by the team, `{start.Path}`)");
+            sb.AppendLine("Read this first. Begin your exploration at the entry points it names and trace the main flows it describes through the code,");
+            sb.AppendLine("following calls across files, projects and services. It may describe several repos; focus on the parts that live in this folder.");
+            sb.AppendLine("```markdown");
+            sb.AppendLine(Truncate(start.Content.Trim(), 8_000));
+            sb.AppendLine("```");
+            sb.AppendLine();
+        }
         sb.AppendLine("Cover, as far as you can verify from the repo itself:");
         sb.AppendLine("- What the project is for, in two or three sentences.");
         sb.AppendLine("- Layout: the important folders/projects and what lives where.");
@@ -63,6 +76,15 @@ public static partial class RepoGuide
             sb.AppendLine("The repo already has .github/copilot-instructions.md; stay consistent with it and do not repeat it verbatim:");
             sb.AppendLine("```markdown");
             sb.AppendLine(Truncate(copilotInstructions, 6_000));
+            sb.AppendLine("```");
+        }
+        if (!string.IsNullOrWhiteSpace(previousGuide))
+        {
+            sb.AppendLine();
+            sb.AppendLine($"The folder already has a {FileName}, which you are replacing. It may be outdated or incomplete: verify it against the code,");
+            sb.AppendLine("keep what is still correct (especially hard-won gotchas), and drop or fix what is wrong:");
+            sb.AppendLine("```markdown");
+            sb.AppendLine(Truncate(previousGuide.Trim(), 8_000));
             sb.AppendLine("```");
         }
         sb.AppendLine();

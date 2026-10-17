@@ -276,21 +276,28 @@ public sealed class LoopRunner
     private static IReadOnlyList<RepoGuideContent> ReadGuides(LoopConfig config) =>
         config.UseAgentsMd ? config.WorkingDirectories.Select(RepoGuide.Read).ToList() : [];
 
-    /// <summary>Writes AGENTS.md for every working folder that has none. A failure is logged, never fatal.</summary>
+    /// <summary>
+    /// Writes AGENTS.md for every working folder that has none (or for all, when regenerating). A failure is
+    /// logged, never fatal.
+    /// </summary>
     private async Task CreateMissingGuidesAsync(ILoopAgent agent, LoopConfig config, ProgressFile progress, CancellationToken ct)
     {
+        var startingPoint = ReadStartingPoint(config);
+
         foreach (var folder in config.WorkingDirectories)
         {
             var existing = RepoGuide.Read(folder);
-            if (!string.IsNullOrWhiteSpace(existing.AgentsMd))
+            var hasGuide = !string.IsNullOrWhiteSpace(existing.AgentsMd);
+            if (hasGuide && !config.RegenerateAgentsMd)
             {
                 AddLog("info", $"Using existing {RepoGuide.FileName} in {folder}.");
                 continue;
             }
 
+            var verb = hasGuide ? "Regenerating" : "Writing";
             var (reply, usage) = await RunGuideTurnAsync(agent, config, folder,
-                $"Writing {RepoGuide.FileName} for {Path.GetFileName(folder)}…",
-                RepoGuide.BuildCreatePrompt(folder, existing.CopilotInstructions), ct);
+                $"{verb} {RepoGuide.FileName} for {Path.GetFileName(folder)}…",
+                RepoGuide.BuildCreatePrompt(folder, existing.CopilotInstructions, startingPoint, hasGuide ? existing.AgentsMd : null), ct);
             if (reply is null) continue;
 
             var content = RepoGuide.ParseReply(reply);
@@ -302,7 +309,23 @@ public sealed class LoopRunner
             if (content.Length > RepoGuide.MaxGuideChars)
                 AddLog("warn", $"{RepoGuide.FileName} for {folder} is long ({content.Length:N0} chars); prompts include only the first {RepoGuide.MaxPromptCharsPerFolder:N0}.");
 
-            TryWriteGuide(folder, content, progress, $"created ({DescribeCost(usage)})");
+            var how = startingPoint is null ? "" : $", starting from {Path.GetFileName(startingPoint.Value.Path)}";
+            TryWriteGuide(folder, content, progress, $"{(hasGuide ? "regenerated" : "created")} ({DescribeCost(usage)}{how})");
+        }
+    }
+
+    private (string Path, string Content)? ReadStartingPoint(LoopConfig config)
+    {
+        var path = config.AgentsMdStartingPointFile;
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        try
+        {
+            return (path, File.ReadAllText(path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            AddLog("warn", $"Could not read starting point file {path}: {ex.Message}");
+            return null;
         }
     }
 
