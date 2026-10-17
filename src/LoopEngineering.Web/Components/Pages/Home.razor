@@ -150,46 +150,20 @@
                 <small>Optional. Set it to keep @(ProgressFile.SanitizeFileName(_config.GoalName))_progress.md out of your repos.</small>
             </label>
 
-            <div class="field">
-                <span class="field-label">Model</span>
-                <div class="row model-row">
-                    @if (Models.Models.Count == 0 && !Models.IsLoading)
-                    {
-                        @* No list (token not set or load failed): fall back to typing the id. *@
-                        <input @bind="_config.Model" placeholder="default (or type a model id)" />
-                    }
-                    else
-                    {
-                        <select @bind="_config.Model" @bind:after="OnModelChanged" disabled="@(Models.IsLoading && Models.Models.Count == 0)">
-                            <option value="">Default (Copilot decides)</option>
-                            @if (!string.IsNullOrWhiteSpace(_config.Model) && Models.Find(_config.Model) is null && Models.Models.Count > 0)
-                            {
-                                <option value="@_config.Model">⚠ @_config.Model (not available)</option>
-                            }
-                            @foreach (var m in Models.Models)
-                            {
-                                <option value="@m.Id" disabled="@(!m.IsEnabled)">
-                                    @m.Name@(m.HasPrices ? $" · {m.PriceLabel}" : "")@(m.IsEnabled ? "" : " (disabled by policy)")
-                                </option>
-                            }
-                        </select>
-                    }
-                    <button class="btn small" title="Reload the model list" @onclick="() => RefreshModels(force: true)" disabled="@(Models.IsLoading || !_tokenFound)">
-                        @if (Models.IsLoading) { <span class="spinner"></span> } else { <span>↻</span> }
-                    </button>
-                </div>
-                <small>@ModelHint()</small>
+            <div class="model-group">
+                <h3>Worker</h3>
+                <ModelPicker Label="Model" @bind-Model="_config.Model" @bind-Effort="_config.ReasoningEffort"
+                             TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)" />
             </div>
 
-            <label>Reasoning effort
-                <select @bind="_config.ReasoningEffort" disabled="@(EffortOptions().Count == 0)">
-                    <option value="">@(EffortOptions().Count == 0 ? "not supported by this model" : "default")</option>
-                    @foreach (var effort in EffortOptions())
-                    {
-                        <option value="@effort">@effort</option>
-                    }
-                </select>
-            </label>
+            <div class="model-group">
+                <h3>Evaluator</h3>
+                <ModelPicker Label="Model" @bind-Model="_config.EvaluatorModel" @bind-Effort="_config.EvaluatorReasoningEffort"
+                             EmptyLabel="Same as worker" EffortEmptyLabel="@(string.IsNullOrWhiteSpace(_config.EvaluatorModel) ? "same as worker" : "default")"
+                             InheritedModel="@_config.Model" ShowRefresh="false"
+                             TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)" />
+                <small class="group-note">Tip: a model from another provider is less likely to share the worker's blind spots.</small>
+            </div>
 
             <label>Token environment variable
                 <input @bind="_config.TokenEnvironmentVariable" @bind:after="OnTokenVariableChanged" />
@@ -429,11 +403,12 @@
         _errors = _config.Validate();
         RefreshTokenStatus();
         if (!_tokenFound) _errors.Add($"Environment variable '{_config.TokenEnvironmentVariable}' is not set.");
-        if (!string.IsNullOrWhiteSpace(_config.Model) && Models.Models.Count > 0)
+        foreach (var (role, id) in new[] { ("Worker", _config.Model), ("Evaluator", _config.EvaluatorModel) })
         {
-            var model = Models.Find(_config.Model);
-            if (model is null) _errors.Add($"Model '{_config.Model}' is not available to your account. Pick one from the list.");
-            else if (!model.IsEnabled) _errors.Add($"Model '{model.Name}' is disabled by policy.");
+            if (string.IsNullOrWhiteSpace(id) || Models.Models.Count == 0) continue;
+            var model = Models.Find(id);
+            if (model is null) _errors.Add($"{role} model '{id}' is not available to your account. Pick one from the list.");
+            else if (!model.IsEnabled) _errors.Add($"{role} model '{model.Name}' is disabled by policy.");
         }
         if (_errors.Count > 0) return;
 
@@ -461,37 +436,9 @@
 
     // ---------- models ----------
 
-    /// <summary>Used when no specific model is chosen; the runtime accepts these for most models.</summary>
-    private static readonly IReadOnlyList<string> GenericEfforts = ["low", "medium", "high", "xhigh", "max"];
-
     private void OnModelsChanged() => _ = InvokeAsync(StateHasChanged);
 
     private Task RefreshModels(bool force) => Models.RefreshAsync(_config.TokenEnvironmentVariable, force);
-
-    private IReadOnlyList<string> EffortOptions() =>
-        Models.Find(_config.Model) is { IsAuto: false } model ? model.ReasoningEfforts : GenericEfforts;
-
-    /// <summary>Drop a reasoning effort the newly chosen model does not support.</summary>
-    private void OnModelChanged()
-    {
-        if (!string.IsNullOrEmpty(_config.ReasoningEffort) && !EffortOptions().Contains(_config.ReasoningEffort))
-            _config.ReasoningEffort = "";
-    }
-
-    private string ModelHint()
-    {
-        if (!_tokenFound) return "Set the token variable to load the models your account can use.";
-        if (Models.IsLoading && Models.Models.Count == 0) return "Loading models…";
-        if (Models.Error is not null && Models.Models.Count == 0) return $"Could not load models: {Models.Error}";
-
-        var model = Models.Find(_config.Model);
-        if (model is { HasPrices: true })
-            return $"AI credits per 1M tokens: input {model.InputCreditsPerMillion:#,0.##}" +
-                   (model.CachedInputCreditsPerMillion is { } cached ? $", cached input {cached:#,0.##}" : "") +
-                   $", output {model.OutputCreditsPerMillion:#,0.##}.";
-        if (model is { IsAuto: true }) return "Copilot picks a model per request.";
-        return $"{Models.Models.Count} models available. Numbers after the name: input / output AI credits per 1M tokens.";
-    }
 
     // ---------- file / folder picker ----------
 

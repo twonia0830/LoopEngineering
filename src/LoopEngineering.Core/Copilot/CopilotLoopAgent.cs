@@ -100,8 +100,10 @@ public sealed class CopilotLoopAgent(LoopConfig config) : ILoopAgent
             Agent = phase == RoundPhase.Worker && !string.IsNullOrWhiteSpace(config.ActiveAgent) ? config.ActiveAgent : null
         };
 
-        if (!string.IsNullOrWhiteSpace(config.Model)) sessionConfig.Model = config.Model;
-        if (!string.IsNullOrWhiteSpace(config.ReasoningEffort)) sessionConfig.ReasoningEffort = config.ReasoningEffort;
+        var model = config.ModelFor(phase);
+        var effort = config.ReasoningEffortFor(phase);
+        if (!string.IsNullOrWhiteSpace(model)) sessionConfig.Model = model;
+        if (!string.IsNullOrWhiteSpace(effort)) sessionConfig.ReasoningEffort = effort;
         return sessionConfig;
     }
 

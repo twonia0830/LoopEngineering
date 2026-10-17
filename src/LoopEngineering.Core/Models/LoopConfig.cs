@@ -72,11 +72,33 @@ public sealed class LoopConfig
         }
     }
 
-    /// <summary>Model id, e.g. "gpt-5" or "claude-sonnet-4.5". Empty = runtime default.</summary>
+    /// <summary>Worker model id, e.g. "gpt-5-mini". Empty = runtime default.</summary>
     public string Model { get; set; } = "";
 
-    /// <summary>"low", "medium", "high", "xhigh", "max" or empty for the model default.</summary>
+    /// <summary>Worker reasoning effort ("low" … "max") or empty for the model default.</summary>
     public string ReasoningEffort { get; set; } = "";
+
+    /// <summary>
+    /// Evaluator model id. Empty = same as the worker. A different model (ideally another provider)
+    /// is less likely to share the worker's blind spots or favour its own style of output.
+    /// </summary>
+    public string EvaluatorModel { get; set; } = "";
+
+    /// <summary>
+    /// Evaluator reasoning effort. Empty = the worker's effort when the evaluator uses the worker's model,
+    /// otherwise the evaluator model's default.
+    /// </summary>
+    public string EvaluatorReasoningEffort { get; set; } = "";
+
+    public string ModelFor(RoundPhase phase) =>
+        phase == RoundPhase.Evaluator && !string.IsNullOrWhiteSpace(EvaluatorModel) ? EvaluatorModel : Model;
+
+    public string ReasoningEffortFor(RoundPhase phase)
+    {
+        if (phase != RoundPhase.Evaluator) return ReasoningEffort;
+        if (!string.IsNullOrWhiteSpace(EvaluatorReasoningEffort)) return EvaluatorReasoningEffort;
+        return string.IsNullOrWhiteSpace(EvaluatorModel) ? ReasoningEffort : "";
+    }
 
     /// <summary>
     /// Name of the environment variable that holds the GitHub token.

@@ -23,9 +23,17 @@
             }
             <span title="Billed: user prompts × model multiplier"><b>@Round.Usage.PremiumRequests.ToString("0.##")</b> premium requests (@Round.Usage.UserRequests prompts)</span>
             <span class="muted">@Round.Usage.ApiCalls API calls</span>
-            @if (Round.Usage.Models.Count > 0)
+        </div>
+        <div class="usage-row phases">
+            @foreach (var (label, usage) in new[] { ("Worker", Round.WorkerUsage), ("Evaluator", Round.EvaluatorUsage) })
             {
-                <span title="Models that actually served the calls">model: <b>@Round.Usage.ModelsLabel</b></span>
+                @if (!usage.IsEmpty)
+                {
+                    <span title="Models that actually served the calls">
+                        <b>@label</b>: @(usage.Models.Count > 0 ? usage.ModelsLabel : "-")
+                        · @TokenUsage.Format(usage.TotalTokens) tokens@(usage.AiCredits is { } c ? $" · {c:0.###} credits" : "")
+                    </span>
+                }
             }
         </div>
     }

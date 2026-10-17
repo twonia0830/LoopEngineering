@@ -1,0 +1,106 @@
+@implements IDisposable
+@inject ModelCatalogService Models
+
+<div class="field">
+    <span class="field-label">@Label</span>
+    <div class="row model-row">
+        @if (Models.Models.Count == 0 && !Models.IsLoading)
+        {
+            @* No list (token not set or load failed): fall back to typing the id. *@
+            <input value="@Model" @onchange="e => SetModel(e.Value?.ToString())" placeholder="@($"{EmptyLabel} (or type a model id)")" />
+        }
+        else
+        {
+            <select value="@Model" @onchange="e => SetModel(e.Value?.ToString())" disabled="@(Models.IsLoading && Models.Models.Count == 0)">
+                <option value="">@EmptyLabel</option>
+                @if (!string.IsNullOrWhiteSpace(Model) && Models.Find(Model) is null && Models.Models.Count > 0)
+                {
+                    <option value="@Model">⚠ @Model (not available)</option>
+                }
+                @foreach (var m in Models.Models)
+                {
+                    <option value="@m.Id" disabled="@(!m.IsEnabled)">
+                        @m.Name@(m.HasPrices ? $" · {m.PriceLabel}" : "")@(m.IsEnabled ? "" : " (disabled by policy)")
+                    </option>
+                }
+            </select>
+        }
+        @if (ShowRefresh)
+        {
+            <button class="btn small" title="Reload the model list" @onclick="Refresh" disabled="@(Models.IsLoading || TokenVariable is null)">
+                @if (Models.IsLoading) { <span class="spinner"></span> } else { <span>↻</span> }
+            </button>
+        }
+    </div>
+    <small>@Hint()</small>
+</div>
+
+<label>@EffortLabel
+    <select value="@Effort" @onchange="e => EffortChanged.InvokeAsync(e.Value?.ToString() ?? string.Empty)" disabled="@(EffortOptions().Count == 0)">
+        <option value="">@(EffortOptions().Count == 0 ? "not supported by this model" : EffortEmptyLabel)</option>
+        @foreach (var effort in EffortOptions())
+        {
+            <option value="@effort">@effort</option>
+        }
+    </select>
+</label>
+
+@code {
+    /// <summary>Used when no specific model is chosen; the runtime accepts these for most models.</summary>
+    private static readonly IReadOnlyList<string> GenericEfforts = ["low", "medium", "high", "xhigh", "max"];
+
+    [Parameter] public string Label { get; set; } = "Model";
+    [Parameter] public string EffortLabel { get; set; } = "Reasoning effort";
+    [Parameter] public string Model { get; set; } = "";
+    [Parameter] public EventCallback<string> ModelChanged { get; set; }
+    [Parameter] public string Effort { get; set; } = "";
+    [Parameter] public EventCallback<string> EffortChanged { get; set; }
+
+    /// <summary>Text of the empty option, e.g. "Default (Copilot decides)" or "Same as worker".</summary>
+    [Parameter] public string EmptyLabel { get; set; } = "Default (Copilot decides)";
+    [Parameter] public string EffortEmptyLabel { get; set; } = "default";
+
+    /// <summary>Model whose efforts and prices apply while <see cref="Model"/> is empty (e.g. the worker's model).</summary>
+    [Parameter] public string? InheritedModel { get; set; }
+
+    /// <summary>Token variable to load the list with; null when the variable isn't set.</summary>
+    [Parameter] public string? TokenVariable { get; set; }
+    [Parameter] public bool ShowRefresh { get; set; } = true;
+
+    private string EffectiveModel => string.IsNullOrWhiteSpace(Model) ? InheritedModel ?? "" : Model;
+
+    protected override void OnInitialized() => Models.Changed += OnModelsChanged;
+
+    private void OnModelsChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private Task Refresh() => TokenVariable is null ? Task.CompletedTask : Models.RefreshAsync(TokenVariable, force: true);
+
+    private IReadOnlyList<string> EffortOptions() =>
+        Models.Find(EffectiveModel) is { IsAuto: false } model ? model.ReasoningEfforts : GenericEfforts;
+
+    private async Task SetModel(string? value)
+    {
+        await ModelChanged.InvokeAsync(value ?? "");
+        // Drop an effort the newly chosen model does not support.
+        if (!string.IsNullOrEmpty(Effort) && !EffortOptions().Contains(Effort))
+            await EffortChanged.InvokeAsync("");
+    }
+
+    private string Hint()
+    {
+        if (TokenVariable is null) return "Set the token variable to load the models your account can use.";
+        if (Models.IsLoading && Models.Models.Count == 0) return "Loading models…";
+        if (Models.Error is not null && Models.Models.Count == 0) return $"Could not load models: {Models.Error}";
+
+        var model = Models.Find(EffectiveModel);
+        var prefix = string.IsNullOrWhiteSpace(Model) && model is not null ? $"{model.Name}: " : "";
+        if (model is { HasPrices: true })
+            return $"{prefix}AI credits per 1M tokens: input {model.InputCreditsPerMillion:#,0.##}" +
+                   (model.CachedInputCreditsPerMillion is { } cached ? $", cached input {cached:#,0.##}" : "") +
+                   $", output {model.OutputCreditsPerMillion:#,0.##}.";
+        if (model is { IsAuto: true }) return "Copilot picks a model per request.";
+        return $"{Models.Models.Count} models available. Numbers after the name: input / output AI credits per 1M tokens.";
+    }
+
+    public void Dispose() => Models.Changed -= OnModelsChanged;
+}

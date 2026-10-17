@@ -141,7 +141,7 @@ public sealed class LoopRunnerTests : IDisposable
         Assert.Equal(2, snap.TotalUsage.UserRequests);
         Assert.Equal(0.5, snap.TotalUsage.AiCredits);
         Assert.Equal(4, snap.TotalUsage.Models["gpt-5"]);
-        Assert.Contains("**Models used:** gpt-5 ×2", File.ReadAllText(snap.ProgressFilePath!));
+        Assert.Contains("**Models used:** worker gpt-5 ×2 (0.25 credits); evaluator -", File.ReadAllText(snap.ProgressFilePath!));
         Assert.Equal(3, roundEvents); // two rounds + run end
         Assert.Contains("Total tokens: in 2,000 / out 400", File.ReadAllText(snap.ProgressFilePath!));
     }

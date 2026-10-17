@@ -57,6 +57,20 @@ Models blocked by policy are shown but disabled. **Reasoning effort** only offer
 chosen model supports. A saved model that is no longer available is flagged and blocks Start. If the
 list can't be loaded (for example the token variable isn't set), the field falls back to free text.
 
+### Worker and evaluator models
+
+The worker and the evaluator each have their own model and reasoning effort. The evaluator defaults
+to **Same as worker**; picking a different model, ideally from another provider, makes it less likely
+to share the worker's blind spots or favour its own style of output. When the evaluator uses its own
+model and its effort is left empty, that model's default effort applies. Each round records which
+models served the worker and the evaluator and what each cost, in the UI and in the progress file.
+
+### Context length
+
+There is no context-length setting: Copilot sessions compact automatically (in the background from
+80% of the model's context window, blocking at 95%). Each round also starts fresh sessions, so a
+prompt only carries the goal, criteria and the tail of the progress file.
+
 ## How a round works
 
 1. Worker prompt = goal (text, file or fetched issues) + working folders + result criteria + the progress file so far (+ extra instructions).

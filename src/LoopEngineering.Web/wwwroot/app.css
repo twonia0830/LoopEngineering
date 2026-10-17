@@ -305,3 +305,8 @@ details > summary { cursor: pointer; font-weight: 600; margin-bottom: 10px; }
 .model-row { align-items: center; }
 .model-row select, .model-row input { flex: 1; }
 .model-row .btn.small { align-self: center; display: inline-flex; align-items: center; }
+
+/* ---------- worker / evaluator groups ---------- */
+.model-group { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px 2px; margin-bottom: 12px; }
+.model-group h3 { margin-bottom: 8px; }
+.model-group .group-note { display: block; color: var(--muted); font-size: 12px; margin: -4px 0 10px; }

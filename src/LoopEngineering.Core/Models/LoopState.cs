@@ -61,7 +61,11 @@ public sealed class RoundResult
     public Evaluation? Evaluation { get; set; }
     public List<SubagentRecord> Subagents { get; set; } = [];
     public int ToolCalls { get; set; }
+    /// <summary>Whole round (worker + evaluator).</summary>
     public TokenUsage Usage { get; set; } = new();
+
+    public TokenUsage WorkerUsage { get; set; } = new();
+    public TokenUsage EvaluatorUsage { get; set; } = new();
     public string? Error { get; set; }
 
     public TimeSpan? Duration => EndedAt - StartedAt;
@@ -71,6 +75,8 @@ public sealed class RoundResult
         var copy = (RoundResult)MemberwiseClone();
         copy.Subagents = Subagents.Select(s => s.Clone()).ToList();
         copy.Usage = Usage.Clone();
+        copy.WorkerUsage = WorkerUsage.Clone();
+        copy.EvaluatorUsage = EvaluatorUsage.Clone();
         return copy;
     }
 }

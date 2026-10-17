@@ -333,6 +333,8 @@ public sealed class LoopRunner
 
     private sealed class Observer(LoopRunner runner, RoundResult round, RoundPhase phase) : IAgentObserver
     {
+        private TokenUsage PhaseUsage => phase == RoundPhase.Evaluator ? round.EvaluatorUsage : round.WorkerUsage;
+
         public void OnOutputDelta(string text) => runner.AppendLive(text);
 
         public void OnToolStarted(string toolName, string? detail)
@@ -378,13 +380,21 @@ public sealed class LoopRunner
 
         public void OnUsage(UsageSample usage)
         {
-            lock (runner._gate) round.Usage.Add(usage);
+            lock (runner._gate)
+            {
+                round.Usage.Add(usage);
+                PhaseUsage.Add(usage);
+            }
             runner.Notify();
         }
 
         public void OnBilling(double premiumRequests, long userRequests, double? aiCredits)
         {
-            lock (runner._gate) round.Usage.AddBilling(premiumRequests, userRequests, aiCredits);
+            lock (runner._gate)
+            {
+                round.Usage.AddBilling(premiumRequests, userRequests, aiCredits);
+                PhaseUsage.AddBilling(premiumRequests, userRequests, aiCredits);
+            }
             runner.Notify();
         }
 

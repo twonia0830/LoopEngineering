@@ -43,7 +43,9 @@ public sealed class ProgressFile
         sb.AppendLine($"- **Max loops:** {config.MaxLoops}");
         sb.AppendLine($"- **Working folders:** {string.Join(", ", config.WorkingDirectories.Select(d => $"`{d}`"))}");
         sb.AppendLine($"- **Goal source:** {goalSource}");
-        sb.AppendLine($"- **Model:** {(string.IsNullOrWhiteSpace(config.Model) ? "(default)" : config.Model)}");
+        sb.AppendLine($"- **Worker model:** {Describe(config.ModelFor(RoundPhase.Worker), config.ReasoningEffortFor(RoundPhase.Worker))}");
+        sb.AppendLine($"- **Evaluator model:** {Describe(config.ModelFor(RoundPhase.Evaluator), config.ReasoningEffortFor(RoundPhase.Evaluator))}" +
+                      (string.IsNullOrWhiteSpace(config.EvaluatorModel) ? " (same as worker)" : ""));
         sb.AppendLine($"- **Criteria source:** {(config.CriteriaSource == CriteriaSource.File ? $"file `{config.CriteriaFilePath}`" : "text")}");
         if (!string.IsNullOrWhiteSpace(config.ActiveAgent)) sb.AppendLine($"- **Agent:** {config.ActiveAgent}");
         if (config.SkillDirectories.Count > 0) sb.AppendLine($"- **Skill directories:** {string.Join(", ", config.SkillDirectories.Select(d => $"`{d}`"))}");
@@ -75,7 +77,8 @@ public sealed class ProgressFile
         sb.AppendLine($"- **Duration:** {FormatDuration(round.Duration)}");
         sb.AppendLine($"- **Tool calls:** {round.ToolCalls}");
         if (!round.Usage.IsEmpty) sb.AppendLine($"- **Tokens:** {round.Usage}");
-        if (round.Usage.Models.Count > 0) sb.AppendLine($"- **Models used:** {round.Usage.ModelsLabel}");
+        if (round.Usage.Models.Count > 0)
+            sb.AppendLine($"- **Models used:** worker {PhaseLabel(round.WorkerUsage)}; evaluator {PhaseLabel(round.EvaluatorUsage)}");
         if (round.Subagents.Count > 0)
             sb.AppendLine($"- **Sub-agents:** {string.Join(", ", round.Subagents.Select(a => $"{a.Name} ({(a.Succeeded == false ? "failed" : "ok")})"))}");
         if (round.Error is not null)
@@ -122,6 +125,12 @@ public sealed class ProgressFile
         var usage = total is { IsEmpty: false } ? $"\n\nTotal tokens: {total}" : "";
         Append($"### Result — {text}\n\nEnded {endedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}{usage}\n");
     }
+
+    private static string PhaseLabel(TokenUsage usage) =>
+        usage.Models.Count == 0 ? "-" : usage.ModelsLabel + (usage.AiCredits is { } c ? $" ({c:0.###} credits)" : "");
+
+    private static string Describe(string model, string effort) =>
+        (string.IsNullOrWhiteSpace(model) ? "(default)" : model) + (string.IsNullOrWhiteSpace(effort) ? "" : $", {effort} reasoning");
 
     private void Append(string text) => File.AppendAllText(Path, text, Encoding.UTF8);
 
