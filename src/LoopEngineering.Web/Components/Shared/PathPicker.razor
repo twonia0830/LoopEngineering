@@ -1,0 +1,188 @@
+@* Server-side file / folder browser. The app runs on the user's machine, so it can list local
+   folders directly and return real paths (a browser file input never reveals the path). *@
+
+@if (Visible)
+{
+    <div class="modal-backdrop" @onclick="Cancel">
+        <div class="modal" @onclick:stopPropagation="true" role="dialog" aria-label="@Title">
+            <div class="modal-head">
+                <h3>@Title</h3>
+                <button class="btn icon" @onclick="Cancel" aria-label="Close">✕</button>
+            </div>
+
+            <div class="row picker-path">
+                <button class="btn small" @onclick="GoUp" disabled="@(_current is null)" aria-label="Up one folder">↑</button>
+                <input @bind="_typed" @bind:event="oninput" @onkeydown="OnPathKey" placeholder="Type or paste a path" />
+                <button class="btn small" @onclick="GoTyped">Go</button>
+            </div>
+
+            @if (_error is not null)
+            {
+                <div class="alert error">@_error</div>
+            }
+
+            <ul class="picker-list">
+                @if (_current is null)
+                {
+                    @foreach (var place in Places())
+                    {
+                        <li @onclick="() => Navigate(place.Path)"><span class="icon">📁</span>@place.Label <span class="muted">@place.Path</span></li>
+                    }
+                }
+                else
+                {
+                    @foreach (var dir in _dirs)
+                    {
+                        <li @onclick="() => Navigate(dir.FullName)">
+                            <span class="icon">📁</span>@dir.Name
+                            @if (IsGitRepo(dir.FullName)) { <span class="badge ok">git</span> }
+                        </li>
+                    }
+                    @if (Mode == PathPickerMode.File)
+                    {
+                        @foreach (var file in _files)
+                        {
+                            <li class="@(_selectedFile == file.FullName ? "selected" : "")"
+                                @onclick="() => _selectedFile = file.FullName"
+                                @ondblclick="() => Choose(file.FullName)">
+                                <span class="icon">📄</span>@file.Name
+                            </li>
+                        }
+                    }
+                    @if (_dirs.Count == 0 && (Mode == PathPickerMode.Folder || _files.Count == 0))
+                    {
+                        <li class="muted empty">Empty folder</li>
+                    }
+                }
+            </ul>
+
+            <div class="modal-foot">
+                <span class="muted picker-choice">@(Mode == PathPickerMode.Folder ? _current : _selectedFile)</span>
+                <button class="btn" @onclick="Cancel">Cancel</button>
+                @if (Mode == PathPickerMode.Folder)
+                {
+                    <button class="btn primary" disabled="@(_current is null)" @onclick="() => Choose(_current!)">Select this folder</button>
+                }
+                else
+                {
+                    <button class="btn primary" disabled="@(_selectedFile is null)" @onclick="() => Choose(_selectedFile!)">Select file</button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public PathPickerMode Mode { get; set; } = PathPickerMode.Folder;
+    [Parameter] public string Title { get; set; } = "Choose a folder";
+    [Parameter] public string? InitialPath { get; set; }
+    [Parameter] public EventCallback<string> OnSelected { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private string? _current;
+    private string _typed = "";
+    private string? _selectedFile;
+    private string? _error;
+    private List<DirectoryInfo> _dirs = [];
+    private List<FileInfo> _files = [];
+    private bool _wasVisible;
+
+    protected override void OnParametersSet()
+    {
+        // Reset each time the picker opens.
+        if (Visible && !_wasVisible)
+        {
+            _selectedFile = null;
+            _error = null;
+            var start = InitialPath;
+            if (!string.IsNullOrWhiteSpace(start) && File.Exists(start))
+            {
+                _selectedFile = Mode == PathPickerMode.File ? start : null;
+                start = Path.GetDirectoryName(start);
+            }
+            Navigate(!string.IsNullOrWhiteSpace(start) && Directory.Exists(start) ? start : null);
+        }
+        _wasVisible = Visible;
+    }
+
+    private void Navigate(string? path)
+    {
+        _error = null;
+        if (path is null)
+        {
+            _current = null;
+            _typed = "";
+            _dirs = [];
+            _files = [];
+            return;
+        }
+
+        try
+        {
+            var dir = new DirectoryInfo(path);
+            var dirs = dir.EnumerateDirectories()
+                .Where(d => !d.Attributes.HasFlag(FileAttributes.Hidden) && !d.Attributes.HasFlag(FileAttributes.System))
+                .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var files = Mode == PathPickerMode.File
+                ? dir.EnumerateFiles().Where(f => !f.Attributes.HasFlag(FileAttributes.Hidden))
+                    .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList()
+                : [];
+
+            _current = dir.FullName;
+            _typed = dir.FullName;
+            _dirs = dirs;
+            _files = files;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or System.Security.SecurityException)
+        {
+            _error = $"Cannot open {path}: {ex.Message}";
+        }
+    }
+
+    private void GoUp()
+    {
+        if (_current is null) return;
+        Navigate(Directory.GetParent(_current)?.FullName);
+    }
+
+    private void GoTyped()
+    {
+        var path = _typed.Trim().Trim('"');
+        if (path.Length == 0) { Navigate(null); return; }
+        if (Mode == PathPickerMode.File && File.Exists(path))
+        {
+            _selectedFile = Path.GetFullPath(path);
+            Navigate(Path.GetDirectoryName(_selectedFile));
+            return;
+        }
+        if (Directory.Exists(path)) Navigate(path);
+        else _error = $"Not found: {path}";
+    }
+
+    private void OnPathKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") GoTyped();
+    }
+
+    private Task Choose(string path) => OnSelected.InvokeAsync(path);
+
+    private Task Cancel() => OnCancel.InvokeAsync();
+
+    private static bool IsGitRepo(string path)
+    {
+        try { return Directory.Exists(Path.Combine(path, ".git")) || File.Exists(Path.Combine(path, ".git")); }
+        catch { return false; }
+    }
+
+    private static IEnumerable<(string Label, string Path)> Places()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        foreach (var candidate in new[] { Path.Combine(home, "source", "repos"), Path.Combine(home, "Documents"), home })
+            if (Directory.Exists(candidate)) yield return (System.IO.Path.GetFileName(candidate), candidate);
+
+        foreach (var drive in DriveInfo.GetDrives().Where(d => d.IsReady))
+            yield return (drive.Name, drive.RootDirectory.FullName);
+    }
+}

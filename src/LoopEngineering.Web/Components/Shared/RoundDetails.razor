@@ -1,0 +1,107 @@
+<div class="round-details">
+    <div class="round-meta">
+        <span class="badge @VerdictClass(Round)">@VerdictText(Round)</span>
+        @if (Round.Evaluation?.Score is int score)
+        {
+            <span class="score">Score @score/100</span>
+        }
+        <span>Started @Round.StartedAt.LocalDateTime.ToString("HH:mm:ss")</span>
+        <span>Duration @ProgressFile.FormatDuration(Round.Duration ?? (DateTimeOffset.Now - Round.StartedAt))</span>
+        <span>@Round.ToolCalls tool calls</span>
+    </div>
+
+    @if (!Round.Usage.IsEmpty)
+    {
+        <div class="usage-row">
+            <span><b>@TokenUsage.Format(Round.Usage.InputTokens)</b> in</span>
+            <span><b>@TokenUsage.Format(Round.Usage.OutputTokens)</b> out</span>
+            <span><b>@TokenUsage.Format(Round.Usage.CacheReadTokens)</b> cache read</span>
+            @if (Round.Usage.ReasoningTokens > 0) { <span><b>@TokenUsage.Format(Round.Usage.ReasoningTokens)</b> reasoning</span> }
+            @if (Round.Usage.AiCredits is { } credits)
+            {
+                <span title="AI credits charged (credit-based billing)"><b>@credits.ToString("0.###")</b> credits</span>
+            }
+            <span title="Billed: user prompts × model multiplier"><b>@Round.Usage.PremiumRequests.ToString("0.##")</b> premium requests (@Round.Usage.UserRequests prompts)</span>
+            <span class="muted">@Round.Usage.ApiCalls API calls</span>
+            @if (Round.Usage.Models.Count > 0)
+            {
+                <span title="Models that actually served the calls">model: <b>@Round.Usage.ModelsLabel</b></span>
+            }
+        </div>
+    }
+
+    @if (Round.Error is not null)
+    {
+        <div class="alert error">@Round.Error</div>
+    }
+
+    @if (Round.Evaluation is { } eval)
+    {
+        <h4>Evaluator</h4>
+        <Markdown Text="@eval.Reasoning" />
+        @if (!string.IsNullOrWhiteSpace(eval.NextSteps))
+        {
+            <h4>Next steps</h4>
+            <Markdown Text="@eval.NextSteps" />
+        }
+        <details>
+            <summary>Raw evaluator reply</summary>
+            <pre class="output small">@eval.Raw</pre>
+        </details>
+    }
+
+    @if (Round.Subagents.Count > 0)
+    {
+        <h4>Sub-agents</h4>
+        <table class="grid">
+            <thead><tr><th>Name</th><th>Phase</th><th>Status</th><th>Duration</th></tr></thead>
+            <tbody>
+                @foreach (var s in Round.Subagents)
+                {
+                    <tr>
+                        <td title="@s.Description">@s.Name</td>
+                        <td>@s.Phase</td>
+                        <td>
+                            @if (s.IsRunning) { <span class="badge running">running</span> }
+                            else if (s.Succeeded == true) { <span class="badge ok">done</span> }
+                            else { <span class="badge fail" title="@s.Error">failed</span> }
+                        </td>
+                        <td>@ProgressFile.FormatDuration((s.EndedAt ?? DateTimeOffset.Now) - s.StartedAt)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+
+    <h4>Worker output</h4>
+    @if (string.IsNullOrWhiteSpace(Round.WorkerOutput))
+    {
+        <p class="muted">No output yet.</p>
+    }
+    else
+    {
+        <Markdown Text="@Round.WorkerOutput" />
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public RoundResult Round { get; set; } = default!;
+
+    public static string VerdictText(RoundResult r) => r.Status switch
+    {
+        RoundStatus.Running => "running",
+        RoundStatus.Failed => "failed",
+        RoundStatus.Cancelled => "cancelled",
+        _ when r.Evaluation?.CriteriaMet == true => "criteria met",
+        _ => "not met"
+    };
+
+    public static string VerdictClass(RoundResult r) => r.Status switch
+    {
+        RoundStatus.Running => "running",
+        RoundStatus.Failed => "fail",
+        RoundStatus.Cancelled => "muted-badge",
+        _ when r.Evaluation?.CriteriaMet == true => "ok",
+        _ => "warn"
+    };
+}

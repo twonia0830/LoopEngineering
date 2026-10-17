@@ -1,0 +1,36 @@
+using LoopEngineering.Core.Models;
+
+namespace LoopEngineering.Core.Agents;
+
+/// <summary>
+/// Runs single prompt turns against an LLM agent backend. One instance lives for one loop run.
+/// Every turn should start from a fresh context; state carries over through the working directory
+/// and the progress file only.
+/// </summary>
+public interface ILoopAgent : IAsyncDisposable
+{
+    Task StartAsync(CancellationToken cancellationToken);
+
+    Task<string> RunTurnAsync(AgentTurnRequest request, IAgentObserver observer, CancellationToken cancellationToken);
+}
+
+public sealed record AgentTurnRequest(RoundPhase Phase, string Prompt, TimeSpan Timeout);
+
+/// <summary>Receives live activity from a running turn.</summary>
+public interface IAgentObserver
+{
+    void OnOutputDelta(string text);
+    void OnToolStarted(string toolName, string? detail);
+    void OnSubagentStarted(string id, string name, string? description);
+    void OnSubagentFinished(string id, bool succeeded, string? error);
+    void OnUsage(UsageSample usage);
+
+    /// <summary>Billing for the finished turn as reported by the runtime: premium requests, prompts, and AI credits (if known).</summary>
+    void OnBilling(double premiumRequests, long userRequests, double? aiCredits);
+    void OnLog(string level, string message);
+}
+
+public interface ILoopAgentFactory
+{
+    ILoopAgent Create(LoopConfig config);
+}

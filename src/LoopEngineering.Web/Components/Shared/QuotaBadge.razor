@@ -1,0 +1,119 @@
+@implements IDisposable
+@inject AccountQuotaService Quota
+@inject CreditLedger Ledger
+
+<div class="quota" title="@Tooltip()">
+    @if (Display() is { } q)
+    {
+        <span class="quota-label">@q.DisplayName@(_fromApp ? " (this app)" : "")</span>
+        @if (q.IsUnlimited)
+        {
+            <span class="quota-value">@Amount(q.Used) used · unlimited</span>
+        }
+        else
+        {
+            <span class="quota-value">@Amount(q.Used) / @Amount(q.Entitlement)</span>
+            <span class="quota-meter"><span class="@MeterClass(q)" style="width:@(UsedPercent(q))%"></span></span>
+            <span class="muted">@q.RemainingPercentage.ToString("0")% left</span>
+        }
+        @* Only show a reset date that lies in the future; the SDK's value for credit accounts is not one. *@
+        @if (q.ResetDate is { } reset && reset > DateTimeOffset.Now)
+        {
+            <span class="muted">· resets @reset.LocalDateTime.ToString("MMM d")</span>
+        }
+    }
+    else if (_snap.Error is null)
+    {
+        <span class="muted">@(_snap.IsRefreshing ? "Loading quota…" : "Quota not loaded")</span>
+    }
+
+    @if (_snap.Error is not null)
+    {
+        <span class="err-text quota-error">⚠ quota unavailable</span>
+    }
+
+    <button class="btn icon" @onclick="Refresh" disabled="@_snap.IsRefreshing" aria-label="Refresh quota">
+        @if (_snap.IsRefreshing) { <span class="spinner"></span> } else { <span>↻</span> }
+    </button>
+</div>
+
+@code {
+    private AccountQuotaSnapshot _snap = new();
+    private bool _fromApp;
+
+    protected override void OnInitialized()
+    {
+        _snap = Quota.Current;
+        Quota.Changed += OnChanged;
+        Ledger.Changed += OnChanged;
+    }
+
+    /// <summary>
+    /// The quota to show. For credit-billed accounts the SDK reports 0 consumed, so the app's own
+    /// monthly credit total is shown instead (usage from VS Code and other tools is not included).
+    /// </summary>
+    private AccountQuota? Display()
+    {
+        _fromApp = false;
+        if (_snap.Primary is not { } q) return null;
+        if (!q.IsCredits || q.Used > 0 || q.IsUnlimited || q.Entitlement <= 0) return q;
+
+        _fromApp = true;
+        var used = Ledger.CurrentMonthCredits;
+        return q with
+        {
+            Used = used,
+            RemainingPercentage = Math.Max(0, 100 - used / q.Entitlement * 100),
+            ResetDate = Ledger.NextReset
+        };
+    }
+
+    private void OnChanged() => _ = InvokeAsync(() =>
+    {
+        _snap = Quota.Current;
+        StateHasChanged();
+    });
+
+    private Task Refresh() => Quota.RefreshAsync(force: true);
+
+    private static string Amount(double value) => value.ToString(value % 1 == 0 ? "N0" : "N1");
+
+    private static double UsedPercent(AccountQuota q) => Math.Clamp(100 - q.RemainingPercentage, 0, 100);
+
+    private static string MeterClass(AccountQuota q) => q.RemainingPercentage switch
+    {
+        <= 10 => "fill fail",
+        <= 30 => "fill warn",
+        _ => "fill"
+    };
+
+    private string Tooltip()
+    {
+        if (Display() is { } shown && _fromApp)
+        {
+            var appLines = new List<string>
+            {
+                $"Credits spent by this app this month: {shown.Used:0.###} of {Amount(shown.Entitlement)}",
+                "Usage from VS Code and other tools is not included. GitHub's API reports 0 consumed for",
+                "credit-billed accounts, so check GitHub's billing page for the account-wide total.",
+                $"Resets {shown.ResetDate!.Value.LocalDateTime:MMM d HH:mm}"
+            };
+            if (_snap.FetchedAt is { } fetched) appLines.Add($"Account checked {fetched.LocalDateTime:HH:mm:ss}");
+            return string.Join("\n", appLines);
+        }
+
+        var lines = _snap.Quotas.Select(q => q.IsUnlimited
+            ? $"{q.DisplayName}: {Amount(q.Used)} used (unlimited)"
+            : $"{q.DisplayName}: {Amount(q.Used)} / {Amount(q.Entitlement)} ({q.RemainingPercentage:0.#}% left)" +
+              (q.Overage > 0 ? $", overage {q.Overage:0.##}" : "")).ToList();
+        if (_snap.FetchedAt is { } at) lines.Add($"Updated {at.LocalDateTime:HH:mm:ss}");
+        if (_snap.Error is not null) lines.Add($"Error: {_snap.Error}");
+        return string.Join("\n", lines);
+    }
+
+    public void Dispose()
+    {
+        Quota.Changed -= OnChanged;
+        Ledger.Changed -= OnChanged;
+    }
+}

@@ -1,0 +1,6 @@
+bin/
+obj/
+.vs/
+*.user
+src/LoopEngineering.Web/App_Data/
+TestResults/

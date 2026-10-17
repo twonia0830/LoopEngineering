@@ -1,0 +1,23 @@
+@using Markdig
+
+<div class="markdown">@((MarkupString)_html)</div>
+
+@code {
+    // DisableHtml keeps raw HTML from agent output from being injected into the page.
+    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
+        .UseAdvancedExtensions()
+        .DisableHtml()
+        .Build();
+
+    private string _html = "";
+    private string? _rendered;
+
+    [Parameter] public string? Text { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (Text == _rendered) return;
+        _rendered = Text;
+        _html = string.IsNullOrWhiteSpace(Text) ? "" : Markdig.Markdown.ToHtml(Text, Pipeline);
+    }
+}

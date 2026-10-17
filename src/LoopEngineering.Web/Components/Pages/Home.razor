@@ -1,0 +1,670 @@
+﻿@page "/"
+@implements IDisposable
+@inject LoopRunner Runner
+@inject ConfigStore Store
+@inject LoopEngineering.Core.Issues.IGitHubIssueFetcher IssueFetcher
+@inject IJSRuntime JS
+@inject AccountQuotaService Quota
+@inject ModelCatalogService Models
+
+<PageTitle>Loop Engineering</PageTitle>
+
+<header class="topbar">
+    <h1>Loop Engineering</h1>
+    <span class="status-pill @StatusClass(_snap.Status)">@StatusText(_snap.Status)</span>
+    <div class="spacer"></div>
+    <QuotaBadge />
+    @if (_snap.IsActive)
+    {
+        <button class="btn danger" @onclick="Stop" disabled="@(_snap.Status == RunStatus.Stopping)">■ Stop</button>
+    }
+    else
+    {
+        <button class="btn primary" @onclick="Start">▶ Start</button>
+    }
+</header>
+
+<main class="layout">
+    @* ---------------- Configuration ---------------- *@
+    <section class="panel config">
+        <h2>Setup</h2>
+        @if (_errors.Count > 0)
+        {
+            <div class="alert error">
+                <ul>@foreach (var e in _errors) { <li>@e</li> }</ul>
+            </div>
+        }
+
+        <fieldset disabled="@_snap.IsActive">
+            <label>Goal / project name
+                <input @bind="_config.GoalName" placeholder="e.g. TodoApi" />
+                <small>Progress file: <code>@(ProgressFile.SanitizeFileName(_config.GoalName))_progress.md</code></small>
+            </label>
+
+            <div class="field">
+                <span class="field-label">Goal description</span>
+                <select @bind="_config.GoalSource">
+                    <option value="@GoalSource.Text">Text</option>
+                    <option value="@GoalSource.File">File</option>
+                    <option value="@GoalSource.GitHubIssues">GitHub issues</option>
+                </select>
+                @switch (_config.GoalSource)
+                {
+                    case GoalSource.Text:
+                        <textarea rows="5" @bind="_config.GoalDescription" placeholder="What should the agent build or fix?"></textarea>
+                        break;
+                    case GoalSource.File:
+                        <div class="row">
+                            <input @bind="_config.GoalFilePath" placeholder="C:\path\to\goal.md" />
+                            <button class="btn small" @onclick="BrowseGoalFile">Browse…</button>
+                        </div>
+                        <small>The file is re-read every round, so you can refine it while the loop runs.</small>
+                        break;
+                    case GoalSource.GitHubIssues:
+                        <textarea rows="4" @bind="_config.GoalIssueLinks" @bind:after="ClearIssueCheck"
+                                  placeholder="@("https://github.com/owner/repo/issues/123\nhttps://github.com/owner/other-repo/issues/45")"></textarea>
+                        <div class="row issue-actions">
+                            <small>One issue per line (a link, or owner/repo#123). Title, description and comments are fetched when the run starts.</small>
+                            <button class="btn small" @onclick="CheckIssues" disabled="@_checkingIssues">@(_checkingIssues ? "Checking…" : "Check issues")</button>
+                        </div>
+                        @if (_issueCheck is not null)
+                        {
+                            <ul class="issue-check">
+                                @foreach (var line in _issueCheck)
+                                {
+                                    <li class="@(line.Ok ? "ok-text" : "err-text")">@(line.Ok ? "✓" : "✗") @line.Text</li>
+                                }
+                            </ul>
+                        }
+                        break;
+                }
+            </div>
+
+            <div class="field">
+                <span class="field-label">Result criteria</span>
+                <div class="radio-row">
+                    <label class="inline"><input type="radio" name="crit" checked="@(_config.CriteriaSource == CriteriaSource.Text)"
+                                                 @onchange="() => _config.CriteriaSource = CriteriaSource.Text" /> Text</label>
+                    <label class="inline"><input type="radio" name="crit" checked="@(_config.CriteriaSource == CriteriaSource.File)"
+                                                 @onchange="() => _config.CriteriaSource = CriteriaSource.File" /> File</label>
+                </div>
+                @if (_config.CriteriaSource == CriteriaSource.Text)
+                {
+                    <textarea rows="5" @bind="_config.CriteriaText" placeholder="@("- All unit tests pass\n- README documents the API")"></textarea>
+                }
+                else
+                {
+                    <div class="row">
+                        <input @bind="_config.CriteriaFilePath" placeholder="C:\path\to\criteria.md" />
+                        <button class="btn small" @onclick="BrowseCriteriaFile">Browse…</button>
+                    </div>
+                    <small>The file is re-read every round.</small>
+                }
+            </div>
+
+            <div class="row">
+                <label>Max loops <input type="number" min="1" @bind="_config.MaxLoops" /></label>
+                <label>Turn timeout (min) <input type="number" min="1" @bind="_config.TurnTimeoutMinutes" /></label>
+                <label>Max failures in a row <input type="number" min="1" @bind="_config.MaxConsecutiveFailures" /></label>
+            </div>
+
+            <div class="field">
+                <span class="field-label">Working folders</span>
+                @if (_config.WorkingDirectories.Count == 0)
+                {
+                    <small>No folder yet. Add the repo(s) the agent should work in.</small>
+                }
+                @for (var i = 0; i < _config.WorkingDirectories.Count; i++)
+                {
+                    var index = i;
+                    var dir = _config.WorkingDirectories[index];
+                    <div class="folder-row">
+                        @if (index == 0)
+                        {
+                            <span class="badge running" title="Session working directory; the progress file goes here unless a progress folder is set">primary</span>
+                        }
+                        else
+                        {
+                            <button class="btn small" title="Make primary" @onclick="() => MakePrimary(index)">↑</button>
+                        }
+                        <input value="@dir" @onchange="e => SetWorkingFolder(index, e.Value?.ToString())" />
+                        @if (!Directory.Exists(dir))
+                        {
+                            <span class="badge fail">missing</span>
+                        }
+                        else if (IsGitRepo(dir))
+                        {
+                            <span class="badge ok">git</span>
+                        }
+                        <button class="btn small" title="Remove" @onclick="() => _config.WorkingDirectories.RemoveAt(index)">✕</button>
+                    </div>
+                }
+                <button class="btn small" @onclick="AddWorkingFolder">+ Add Working Folder</button>
+            </div>
+
+            <label>Progress file folder
+                <div class="row">
+                    <input @bind="_config.ProgressDirectory" placeholder="(first working folder)" />
+                    <button class="btn small" @onclick="BrowseProgressFolder">Browse…</button>
+                </div>
+                <small>Optional. Set it to keep @(ProgressFile.SanitizeFileName(_config.GoalName))_progress.md out of your repos.</small>
+            </label>
+
+            <div class="field">
+                <span class="field-label">Model</span>
+                <div class="row model-row">
+                    @if (Models.Models.Count == 0 && !Models.IsLoading)
+                    {
+                        @* No list (token not set or load failed): fall back to typing the id. *@
+                        <input @bind="_config.Model" placeholder="default (or type a model id)" />
+                    }
+                    else
+                    {
+                        <select @bind="_config.Model" @bind:after="OnModelChanged" disabled="@(Models.IsLoading && Models.Models.Count == 0)">
+                            <option value="">Default (Copilot decides)</option>
+                            @if (!string.IsNullOrWhiteSpace(_config.Model) && Models.Find(_config.Model) is null && Models.Models.Count > 0)
+                            {
+                                <option value="@_config.Model">⚠ @_config.Model (not available)</option>
+                            }
+                            @foreach (var m in Models.Models)
+                            {
+                                <option value="@m.Id" disabled="@(!m.IsEnabled)">
+                                    @m.Name@(m.HasPrices ? $" · {m.PriceLabel}" : "")@(m.IsEnabled ? "" : " (disabled by policy)")
+                                </option>
+                            }
+                        </select>
+                    }
+                    <button class="btn small" title="Reload the model list" @onclick="() => RefreshModels(force: true)" disabled="@(Models.IsLoading || !_tokenFound)">
+                        @if (Models.IsLoading) { <span class="spinner"></span> } else { <span>↻</span> }
+                    </button>
+                </div>
+                <small>@ModelHint()</small>
+            </div>
+
+            <label>Reasoning effort
+                <select @bind="_config.ReasoningEffort" disabled="@(EffortOptions().Count == 0)">
+                    <option value="">@(EffortOptions().Count == 0 ? "not supported by this model" : "default")</option>
+                    @foreach (var effort in EffortOptions())
+                    {
+                        <option value="@effort">@effort</option>
+                    }
+                </select>
+            </label>
+
+            <label>Token environment variable
+                <input @bind="_config.TokenEnvironmentVariable" @bind:after="OnTokenVariableChanged" />
+                <small class="@(_tokenFound ? "ok-text" : "err-text")">
+                    @(_tokenFound ? "✓ Variable is set. Only this token is passed to the SDK." : "✗ Variable not set. Set it to a GitHub token with Copilot access.")
+                </small>
+            </label>
+
+            <details open="@(_skillDirs.Length + _agentDirs.Length > 0 || _config.CustomAgents.Count > 0)">
+                <summary>Skills &amp; agents</summary>
+
+                <label>Skill directories (one per line)
+                    <textarea rows="2" @bind="_skillDirs" placeholder="D:\skills  (each skill = sub folder with SKILL.md)"></textarea>
+                </label>
+                <label>Agent directories (one per line)
+                    <textarea rows="2" @bind="_agentDirs" placeholder="D:\agents  (*.agent.md files)"></textarea>
+                </label>
+
+                <div class="field">
+                    <span class="field-label">Inline custom agents</span>
+                    @foreach (var agent in _config.CustomAgents)
+                    {
+                        <div class="agent-card">
+                            <div class="row">
+                                <input @bind="agent.Name" placeholder="name" />
+                                <input @bind="agent.Description" placeholder="description (helps the model pick it)" />
+                                <button class="btn small" @onclick="() => _config.CustomAgents.Remove(agent)">✕</button>
+                            </div>
+                            <textarea rows="3" @bind="agent.Prompt" placeholder="System prompt for this agent"></textarea>
+                            <input value="@string.Join(", ", agent.Skills)" placeholder="skills to preload (comma separated)"
+                                   @onchange="e => agent.Skills = SplitList(e.Value?.ToString(), ',')" />
+                        </div>
+                    }
+                    <button class="btn small" @onclick="() => _config.CustomAgents.Add(new CustomAgentDefinition())">+ Add agent</button>
+                </div>
+
+                <label>Run worker as agent
+                    <input @bind="_config.ActiveAgent" list="agent-names" placeholder="(default agent)" />
+                    <datalist id="agent-names">
+                        @foreach (var a in _config.CustomAgents.Where(a => !string.IsNullOrWhiteSpace(a.Name)))
+                        {
+                            <option value="@a.Name"></option>
+                        }
+                    </datalist>
+                    <small>Name of an inline agent or one from the agent directories.</small>
+                </label>
+
+                <label class="inline">
+                    <input type="checkbox" @bind="_config.EnableConfigDiscovery" />
+                    Also let Copilot discover config (instructions, skills, MCP) from the working directory and ~/.copilot
+                </label>
+            </details>
+
+            <label>Extra instructions for every round
+                <textarea rows="3" @bind="_config.ExtraInstructions" placeholder="Optional"></textarea>
+            </label>
+        </fieldset>
+    </section>
+
+    @* ---------------- Monitor ---------------- *@
+    <section class="panel monitor">
+        <div class="stats">
+            <div class="stat"><span class="label">Goal</span><span class="value">@(_snap.GoalName is "" ? "—" : _snap.GoalName)</span></div>
+            <div class="stat"><span class="label">Round</span><span class="value">@_snap.CurrentRound / @_snap.MaxLoops</span></div>
+            <div class="stat"><span class="label">Phase</span><span class="value">@(_snap.Phase == RoundPhase.None ? "—" : _snap.Phase.ToString())</span></div>
+            <div class="stat"><span class="label">Elapsed</span><span class="value">@Elapsed()</span></div>
+            <div class="stat" title="@(_snap.TotalUsage.IsEmpty ? "" : _snap.TotalUsage.ToString())">
+                <span class="label">Tokens (run)</span>
+                <span class="value">@(_snap.TotalUsage.IsEmpty ? "—" : TokenUsage.Format(_snap.TotalUsage.TotalTokens))</span>
+                @if (!_snap.TotalUsage.IsEmpty)
+                {
+                    <span class="sub" title="@_snap.TotalUsage.ToString()">@(_snap.TotalUsage.AiCredits is { } credits ? $"{credits:0.###} credits" : $"{_snap.TotalUsage.PremiumRequests:0.##} premium req") · @_snap.TotalUsage.UserRequests prompts</span>
+                }
+            </div>
+        </div>
+        <div class="progress"><div class="bar" style="width:@(ProgressPercent())%"></div></div>
+        @if (_snap.CurrentActivity is not null)
+        {
+            <div class="activity"><span class="spinner"></span>@_snap.CurrentActivity</div>
+        }
+
+        <div class="subagents">
+            <h3>Running sub-agents</h3>
+            @if (_snap.ActiveSubagents.Count == 0)
+            {
+                <p class="muted">None right now.</p>
+            }
+            else
+            {
+                @foreach (var s in _snap.ActiveSubagents)
+                {
+                    <div class="subagent" title="@s.Description">
+                        <span class="spinner"></span><b>@s.Name</b>
+                        <span class="muted">@s.Phase · @ProgressFile.FormatDuration(DateTimeOffset.Now - s.StartedAt)</span>
+                    </div>
+                }
+            }
+        </div>
+
+        <nav class="tabs">
+            @foreach (var tab in new[] { "Live", "Rounds", "Progress file", "Log" })
+            {
+                <button class="@(_tab == tab ? "active" : "")" @onclick="() => SelectTab(tab)">@tab
+                    @if (tab == "Rounds" && _snap.Rounds.Count > 0) { <span class="count">@_snap.Rounds.Count</span> }
+                </button>
+            }
+        </nav>
+
+        @switch (_tab)
+        {
+            case "Live":
+                <pre class="output" @ref="_liveEl">@(_snap.LiveOutput is "" ? "Output of the running turn streams here." : _snap.LiveOutput)</pre>
+                break;
+
+            case "Rounds":
+                @if (_snap.Rounds.Count == 0)
+                {
+                    <p class="muted">No rounds yet.</p>
+                }
+                else
+                {
+                    <div class="rounds">
+                        <ul class="round-list">
+                            @foreach (var r in _snap.Rounds)
+                            {
+                                <li class="@(SelectedRound?.Number == r.Number ? "selected" : "")" @onclick="() => _selectedRound = r.Number">
+                                    <span>Round @r.Number</span>
+                                    <span class="badge @RoundDetails.VerdictClass(r)">@RoundDetails.VerdictText(r)</span>
+                                    @if (r.Evaluation?.Score is int sc) { <span class="muted">@sc</span> }
+                                    @if (!r.Usage.IsEmpty) { <span class="muted tokens">@TokenUsage.Format(r.Usage.TotalTokens) tok</span> }
+                                </li>
+                            }
+                        </ul>
+                        @if (SelectedRound is { } sel)
+                        {
+                            <RoundDetails Round="sel" />
+                        }
+                    </div>
+                }
+                break;
+
+            case "Progress file":
+                <div class="progress-file">
+                    <div class="row">
+                        <code>@(_snap.ProgressFilePath ?? "(starts with the first run)")</code>
+                        <button class="btn small" @onclick="LoadProgressFile">Reload</button>
+                    </div>
+                    <Markdown Text="@_progressContent" />
+                </div>
+                break;
+
+            case "Log":
+                <div class="log">
+                    @foreach (var entry in _snap.Log.Reverse())
+                    {
+                        <div class="log-line @entry.Level"><span class="time">@entry.Time.LocalDateTime.ToString("HH:mm:ss")</span>@entry.Message</div>
+                    }
+                </div>
+                break;
+        }
+    </section>
+</main>
+
+<PathPicker Visible="_pickerVisible" Mode="_pickerMode" Title="@_pickerTitle" InitialPath="@_pickerInitial"
+            OnSelected="OnPicked" OnCancel="() => _pickerVisible = false" />
+
+@code {
+    private LoopConfig _config = new();
+    private string _skillDirs = "";
+    private string _agentDirs = "";
+    private List<string> _errors = [];
+    private bool _tokenFound;
+
+    private LoopSnapshot _snap = new();
+    private string _tab = "Live";
+    private int? _selectedRound;
+    private string? _progressContent;
+    private ElementReference _liveEl;
+
+    private volatile bool _dirty;
+    private int _ticks;
+    private Timer? _refreshTimer;
+
+    private RoundResult? SelectedRound =>
+        _snap.Rounds.FirstOrDefault(r => r.Number == _selectedRound) ?? _snap.Rounds.LastOrDefault();
+
+    protected override void OnInitialized()
+    {
+        _config = Store.Load();
+        if (string.IsNullOrWhiteSpace(_config.TokenEnvironmentVariable)) _config.TokenEnvironmentVariable = "COPILOT_LOOP_TOKEN";
+        _skillDirs = string.Join(Environment.NewLine, _config.SkillDirectories);
+        _agentDirs = string.Join(Environment.NewLine, _config.AgentDirectories);
+        RefreshTokenStatus();
+        Quota.TokenVariable = _config.TokenEnvironmentVariable;
+        if (_tokenFound && Quota.Current.FetchedAt is null) _ = Quota.RefreshAsync(force: false);
+        Models.Changed += OnModelsChanged;
+        if (_tokenFound) _ = RefreshModels(force: false);
+
+        _snap = Runner.GetSnapshot();
+        Runner.Changed += OnRunnerChanged;
+        // Runner events can fire many times per second while output streams; repaint at most ~3x/sec.
+        _refreshTimer = new Timer(_ => Repaint(), null, TimeSpan.FromMilliseconds(300), TimeSpan.FromMilliseconds(300));
+    }
+
+    private void OnRunnerChanged() => _dirty = true;
+
+    private void Repaint()
+    {
+        // Also repaint every ~1s while active so the elapsed timers move.
+        var tick = ++_ticks % 3 == 0;
+        if (!_dirty && !(tick && _snap.IsActive)) return;
+        _dirty = false;
+        _ = InvokeAsync(() =>
+        {
+            var wasActive = _snap.IsActive;
+            _snap = Runner.GetSnapshot();
+            if (wasActive && !_snap.IsActive && _tab == "Progress file") LoadProgressFile();
+            StateHasChanged();
+        });
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_tab == "Live" && _snap.IsActive)
+        {
+            try { await JS.InvokeVoidAsync("loopUi.scrollToBottom", _liveEl); }
+            catch (JSDisconnectedException) { }
+        }
+    }
+
+    private void Start()
+    {
+        _config.SkillDirectories = SplitList(_skillDirs, '\n');
+        _config.AgentDirectories = SplitList(_agentDirs, '\n');
+        _config.CustomAgents.RemoveAll(a => string.IsNullOrWhiteSpace(a.Name) && string.IsNullOrWhiteSpace(a.Prompt));
+
+        _errors = _config.Validate();
+        RefreshTokenStatus();
+        if (!_tokenFound) _errors.Add($"Environment variable '{_config.TokenEnvironmentVariable}' is not set.");
+        if (!string.IsNullOrWhiteSpace(_config.Model) && Models.Models.Count > 0)
+        {
+            var model = Models.Find(_config.Model);
+            if (model is null) _errors.Add($"Model '{_config.Model}' is not available to your account. Pick one from the list.");
+            else if (!model.IsEnabled) _errors.Add($"Model '{model.Name}' is disabled by policy.");
+        }
+        if (_errors.Count > 0) return;
+
+        try
+        {
+            Store.Save(_config);
+            Quota.TokenVariable = _config.TokenEnvironmentVariable;
+            Runner.Start(_config);
+            _selectedRound = null;
+            _progressContent = null;
+            _tab = "Live";
+        }
+        catch (Exception ex)
+        {
+            _errors = [ex.Message];
+        }
+        _snap = Runner.GetSnapshot();
+    }
+
+    private void Stop()
+    {
+        Runner.Stop();
+        _snap = Runner.GetSnapshot();
+    }
+
+    // ---------- models ----------
+
+    /// <summary>Used when no specific model is chosen; the runtime accepts these for most models.</summary>
+    private static readonly IReadOnlyList<string> GenericEfforts = ["low", "medium", "high", "xhigh", "max"];
+
+    private void OnModelsChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private Task RefreshModels(bool force) => Models.RefreshAsync(_config.TokenEnvironmentVariable, force);
+
+    private IReadOnlyList<string> EffortOptions() =>
+        Models.Find(_config.Model) is { IsAuto: false } model ? model.ReasoningEfforts : GenericEfforts;
+
+    /// <summary>Drop a reasoning effort the newly chosen model does not support.</summary>
+    private void OnModelChanged()
+    {
+        if (!string.IsNullOrEmpty(_config.ReasoningEffort) && !EffortOptions().Contains(_config.ReasoningEffort))
+            _config.ReasoningEffort = "";
+    }
+
+    private string ModelHint()
+    {
+        if (!_tokenFound) return "Set the token variable to load the models your account can use.";
+        if (Models.IsLoading && Models.Models.Count == 0) return "Loading models…";
+        if (Models.Error is not null && Models.Models.Count == 0) return $"Could not load models: {Models.Error}";
+
+        var model = Models.Find(_config.Model);
+        if (model is { HasPrices: true })
+            return $"AI credits per 1M tokens: input {model.InputCreditsPerMillion:#,0.##}" +
+                   (model.CachedInputCreditsPerMillion is { } cached ? $", cached input {cached:#,0.##}" : "") +
+                   $", output {model.OutputCreditsPerMillion:#,0.##}.";
+        if (model is { IsAuto: true }) return "Copilot picks a model per request.";
+        return $"{Models.Models.Count} models available. Numbers after the name: input / output AI credits per 1M tokens.";
+    }
+
+    // ---------- file / folder picker ----------
+
+    private bool _pickerVisible;
+    private PathPickerMode _pickerMode;
+    private string _pickerTitle = "";
+    private string? _pickerInitial;
+    private Action<string>? _pickerTarget;
+
+    private void OpenPicker(PathPickerMode mode, string title, string? initial, Action<string> target)
+    {
+        _pickerMode = mode;
+        _pickerTitle = title;
+        _pickerInitial = string.IsNullOrWhiteSpace(initial) ? _config.PrimaryWorkingDirectory : initial;
+        _pickerTarget = target;
+        _pickerVisible = true;
+    }
+
+    private void OnPicked(string path)
+    {
+        _pickerVisible = false;
+        _pickerTarget?.Invoke(path);
+    }
+
+    private void BrowseGoalFile() =>
+        OpenPicker(PathPickerMode.File, "Choose the goal file", _config.GoalFilePath, p => _config.GoalFilePath = p);
+
+    private void BrowseCriteriaFile() =>
+        OpenPicker(PathPickerMode.File, "Choose the criteria file", _config.CriteriaFilePath, p => _config.CriteriaFilePath = p);
+
+    private void BrowseProgressFolder() =>
+        OpenPicker(PathPickerMode.Folder, "Choose where to write the progress file", _config.ProgressDirectory, p => _config.ProgressDirectory = p);
+
+    // ---------- working folders ----------
+
+    private void AddWorkingFolder() =>
+        OpenPicker(PathPickerMode.Folder, "Add a working folder", _config.WorkingDirectories.LastOrDefault(), p =>
+        {
+            if (!_config.WorkingDirectories.Contains(p, StringComparer.OrdinalIgnoreCase)) _config.WorkingDirectories.Add(p);
+        });
+
+    private void SetWorkingFolder(int index, string? value) =>
+        _config.WorkingDirectories[index] = (value ?? "").Trim().Trim('"');
+
+    private void MakePrimary(int index)
+    {
+        var dir = _config.WorkingDirectories[index];
+        _config.WorkingDirectories.RemoveAt(index);
+        _config.WorkingDirectories.Insert(0, dir);
+    }
+
+    private static bool IsGitRepo(string dir) =>
+        Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git"));
+
+    // ---------- GitHub issues ----------
+
+    private sealed record IssueCheckLine(bool Ok, string Text);
+
+    private List<IssueCheckLine>? _issueCheck;
+    private bool _checkingIssues;
+
+    private void ClearIssueCheck() => _issueCheck = null;
+
+    /// <summary>Fetches each linked issue so problems (typos, private repos the token can't see) show before Start.</summary>
+    private async Task CheckIssues()
+    {
+        _checkingIssues = true;
+        var results = new List<IssueCheckLine>();
+        try
+        {
+            foreach (var line in GitHubIssueRef.SplitLines(_config.GoalIssueLinks))
+            {
+                if (!GitHubIssueRef.TryParse(line, out var issueRef))
+                {
+                    results.Add(new(false, $"Not an issue link: {line}"));
+                    continue;
+                }
+                try
+                {
+                    var issue = await IssueFetcher.FetchAsync(issueRef, _config.TokenEnvironmentVariable, CancellationToken.None);
+                    results.Add(new(true, $"{issueRef} — {issue.Title} ({issue.State}, {issue.Comments.Count} comments)"));
+                }
+                catch (Exception ex)
+                {
+                    results.Add(new(false, ex.Message));
+                }
+            }
+            if (results.Count == 0) results.Add(new(false, "No issue links entered."));
+        }
+        finally
+        {
+            _issueCheck = results;
+            _checkingIssues = false;
+        }
+    }
+
+    private void SelectTab(string tab)
+    {
+        _tab = tab;
+        if (tab == "Progress file") LoadProgressFile();
+    }
+
+    private void LoadProgressFile()
+    {
+        var path = _snap.ProgressFilePath ?? (string.IsNullOrWhiteSpace(_config.EffectiveProgressDirectory) || string.IsNullOrWhiteSpace(_config.GoalName)
+            ? null
+            : new ProgressFile(_config.EffectiveProgressDirectory, _config.GoalName).Path);
+        try
+        {
+            _progressContent = path is not null && File.Exists(path) ? File.ReadAllText(path) : "_No progress file yet._";
+        }
+        catch (IOException ex)
+        {
+            _progressContent = $"Could not read progress file: {ex.Message}";
+        }
+    }
+
+    private void OnTokenVariableChanged()
+    {
+        RefreshTokenStatus();
+        if (_snap.IsActive) return;
+        Quota.TokenVariable = _config.TokenEnvironmentVariable;
+        if (_tokenFound)
+        {
+            _ = Quota.RefreshAsync();
+            _ = RefreshModels(force: true);
+        }
+    }
+
+    private void RefreshTokenStatus() => _tokenFound = TokenResolver.Resolve(_config.TokenEnvironmentVariable) is not null;
+
+    private static List<string> SplitList(string? text, char separator) =>
+        (text ?? "").Split(separator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    private string Elapsed()
+    {
+        if (_snap.StartedAt is not { } start) return "—";
+        return ProgressFile.FormatDuration((_snap.EndedAt ?? DateTimeOffset.Now) - start);
+    }
+
+    private int ProgressPercent()
+    {
+        if (_snap.MaxLoops == 0) return 0;
+        if (_snap.Status == RunStatus.CriteriaMet) return 100;
+        var done = _snap.Rounds.Count(r => r.Status != RoundStatus.Running);
+        return Math.Min(100, done * 100 / _snap.MaxLoops);
+    }
+
+    private static string StatusText(RunStatus s) => s switch
+    {
+        RunStatus.Idle => "Idle",
+        RunStatus.Running => "Running",
+        RunStatus.Stopping => "Stopping…",
+        RunStatus.CriteriaMet => "Criteria met",
+        RunStatus.MaxLoopsReached => "Max loops reached",
+        RunStatus.Stopped => "Stopped",
+        RunStatus.Failed => "Failed",
+        _ => s.ToString()
+    };
+
+    private static string StatusClass(RunStatus s) => s switch
+    {
+        RunStatus.Running or RunStatus.Stopping => "running",
+        RunStatus.CriteriaMet => "ok",
+        RunStatus.Failed => "fail",
+        RunStatus.MaxLoopsReached => "warn",
+        _ => ""
+    };
+
+    public void Dispose()
+    {
+        Runner.Changed -= OnRunnerChanged;
+        Models.Changed -= OnModelsChanged;
+        _refreshTimer?.Dispose();
+    }
+}

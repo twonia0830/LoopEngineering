@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "loop-web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "src/LoopEngineering.Web", "--launch-profile", "http"],
+      "port": 5173
+    }
+  ]
+}
