@@ -9,6 +9,22 @@ public enum GoalSource
     GitHubIssues
 }
 
+public enum AgentBackend
+{
+    /// <summary>GitHub Copilot SDK (Copilot subscription, models listed by your account).</summary>
+    Copilot,
+
+    /// <summary>Claude Code CLI in headless mode (Claude subscription, Anthropic models).</summary>
+    ClaudeCode
+}
+
+public enum AgentsMdBackendChoice
+{
+    SameAsEvaluator,
+    Copilot,
+    ClaudeCode
+}
+
 public enum CriteriaSource
 {
     Text,
@@ -114,11 +130,49 @@ public sealed class LoopConfig
     /// <summary>Reasoning effort for writing AGENTS.md. Empty = the evaluator's when using its model, else the model default.</summary>
     public string AgentsMdReasoningEffort { get; set; } = "";
 
+    /// <summary>Which agent runtime runs the worker.</summary>
+    public AgentBackend WorkerBackend { get; set; } = AgentBackend.Copilot;
+
+    /// <summary>Which agent runtime runs the evaluator (e.g. Copilot builds, Claude reviews).</summary>
+    public AgentBackend EvaluatorBackend { get; set; } = AgentBackend.Copilot;
+
+    /// <summary>Which agent runtime writes AGENTS.md.</summary>
+    public AgentsMdBackendChoice AgentsMdBackend { get; set; } = AgentsMdBackendChoice.SameAsEvaluator;
+
+    /// <summary>
+    /// Name of the environment variable holding a Claude Code token (from `claude setup-token`). Read from this
+    /// variable only and handed to the Claude Code process explicitly; its own login lookup is not used.
+    /// </summary>
+    public string ClaudeTokenEnvironmentVariable { get; set; } = "CLAUDE_LOOP_TOKEN";
+
+    /// <summary>Path to the `claude` executable. Empty = find it on PATH (or ~/.local/bin).</summary>
+    public string ClaudeCliPath { get; set; } = "";
+
+    public AgentBackend BackendFor(RoundPhase phase) => phase switch
+    {
+        RoundPhase.Evaluator => EvaluatorBackend,
+        RoundPhase.Guide => AgentsMdBackend switch
+        {
+            AgentsMdBackendChoice.Copilot => AgentBackend.Copilot,
+            AgentsMdBackendChoice.ClaudeCode => AgentBackend.ClaudeCode,
+            _ => EvaluatorBackend
+        },
+        _ => WorkerBackend
+    };
+
+    public bool UsesBackend(AgentBackend backend) =>
+        WorkerBackend == backend || EvaluatorBackend == backend || (UseAgentsMd && BackendFor(RoundPhase.Guide) == backend);
+
+    /// <summary>
+    /// Model for a phase. An empty evaluator/guide model inherits from the role it follows, but only when both
+    /// run on the same backend: a Copilot model id means nothing to Claude Code and vice versa.
+    /// </summary>
     public string ModelFor(RoundPhase phase) => phase switch
     {
         RoundPhase.Guide when !string.IsNullOrWhiteSpace(AgentsMdModel) => AgentsMdModel,
-        RoundPhase.Guide => ModelFor(RoundPhase.Evaluator),
+        RoundPhase.Guide => BackendFor(RoundPhase.Guide) == BackendFor(RoundPhase.Evaluator) ? ModelFor(RoundPhase.Evaluator) : "",
         RoundPhase.Evaluator when !string.IsNullOrWhiteSpace(EvaluatorModel) => EvaluatorModel,
+        RoundPhase.Evaluator => EvaluatorBackend == WorkerBackend ? Model : "",
         _ => Model
     };
 
@@ -127,11 +181,13 @@ public sealed class LoopConfig
         if (phase == RoundPhase.Guide)
         {
             if (!string.IsNullOrWhiteSpace(AgentsMdReasoningEffort)) return AgentsMdReasoningEffort;
-            return string.IsNullOrWhiteSpace(AgentsMdModel) ? ReasoningEffortFor(RoundPhase.Evaluator) : "";
+            return string.IsNullOrWhiteSpace(AgentsMdModel) && BackendFor(RoundPhase.Guide) == BackendFor(RoundPhase.Evaluator)
+                ? ReasoningEffortFor(RoundPhase.Evaluator)
+                : "";
         }
         if (phase != RoundPhase.Evaluator) return ReasoningEffort;
         if (!string.IsNullOrWhiteSpace(EvaluatorReasoningEffort)) return EvaluatorReasoningEffort;
-        return string.IsNullOrWhiteSpace(EvaluatorModel) ? ReasoningEffort : "";
+        return string.IsNullOrWhiteSpace(EvaluatorModel) && EvaluatorBackend == WorkerBackend ? ReasoningEffort : "";
     }
 
     /// <summary>

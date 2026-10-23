@@ -28,6 +28,12 @@ public sealed class TokenUsage
     /// <summary>AI credits charged, for accounts on credit (token-based) billing. Null until the runtime reports any.</summary>
     public double? AiCredits { get; set; }
 
+    /// <summary>
+    /// Cost Claude Code reports for its turns, in USD at API prices. On a Claude subscription this is an
+    /// API-equivalent estimate, not a charge. Null when no Claude Code turn ran.
+    /// </summary>
+    public double? EstimatedCostUsd { get; set; }
+
     public int ApiCalls { get; set; }
 
     /// <summary>Models that actually served the calls (as reported by the runtime), with call counts.</summary>
@@ -35,7 +41,7 @@ public sealed class TokenUsage
 
     public long TotalTokens => InputTokens + OutputTokens;
 
-    public bool IsEmpty => ApiCalls == 0 && UserRequests == 0;
+    public bool IsEmpty => ApiCalls == 0 && UserRequests == 0 && EstimatedCostUsd is null;
 
     public void Add(UsageSample sample)
     {
@@ -54,8 +60,11 @@ public sealed class TokenUsage
         if (aiCredits is { } credits) AiCredits = (AiCredits ?? 0) + credits;
     }
 
+    public void AddEstimatedCost(double usd) => EstimatedCostUsd = (EstimatedCostUsd ?? 0) + usd;
+
     public void Add(TokenUsage other)
     {
+        if (other.EstimatedCostUsd is { } usd) AddEstimatedCost(usd);
         InputTokens += other.InputTokens;
         OutputTokens += other.OutputTokens;
         CacheReadTokens += other.CacheReadTokens;
@@ -72,6 +81,7 @@ public sealed class TokenUsage
         InputTokens = OutputTokens = CacheReadTokens = ReasoningTokens = UserRequests = 0;
         PremiumRequests = 0;
         AiCredits = null;
+        EstimatedCostUsd = null;
         ApiCalls = 0;
         Models.Clear();
     }
@@ -104,7 +114,8 @@ public sealed class TokenUsage
     public override string ToString() =>
         $"in {Format(InputTokens)} / out {Format(OutputTokens)} (cache read {Format(CacheReadTokens)}), " +
         $"{ApiCalls} API calls, {PremiumRequests:0.##} premium requests ({UserRequests} prompts)" +
-        (AiCredits is { } credits ? $", {credits:0.###} AI credits" : "");
+        (AiCredits is { } credits ? $", {credits:0.###} AI credits" : "") +
+        (EstimatedCostUsd is { } usd ? $", Claude ≈${usd:0.###} (API-equivalent)" : "");
 }
 
 /// <summary>One quota bucket of the Copilot account, e.g. "premium_interactions".</summary>

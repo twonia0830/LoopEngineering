@@ -21,6 +21,10 @@
             {
                 <span title="AI credits charged (credit-based billing)"><b>@credits.ToString("0.###")</b> credits</span>
             }
+            @if (Round.Usage.EstimatedCostUsd is { } usd)
+            {
+                <span title="Claude Code's reported cost at API prices; on a subscription this is not charged"><b>≈$@usd.ToString("0.###")</b> Claude (API-equivalent)</span>
+            }
             <span title="Billed: user prompts × model multiplier"><b>@Round.Usage.PremiumRequests.ToString("0.##")</b> premium requests (@Round.Usage.UserRequests prompts)</span>
             <span class="muted">@Round.Usage.ApiCalls API calls</span>
         </div>
@@ -31,7 +35,7 @@
                 {
                     <span title="Models that actually served the calls">
                         <b>@label</b>: @(usage.Models.Count > 0 ? usage.ModelsLabel : "-")
-                        · @TokenUsage.Format(usage.TotalTokens) tokens@(usage.AiCredits is { } c ? $" · {c:0.###} credits" : "")
+                        · @TokenUsage.Format(usage.TotalTokens) tokens@(usage.AiCredits is { } c ? $" · {c:0.###} credits" : "")@(usage.EstimatedCostUsd is { } u ? $" · ≈${u:0.###}" : "")
                     </span>
                 }
             }

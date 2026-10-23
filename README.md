@@ -49,6 +49,34 @@ The token value is never shown in the UI or saved to `App_Data/last-config.json`
 - **Progress file folder** (optional) keeps `{GoalName}_progress.md` out of your repos; by default it
   goes into the primary folder.
 
+## Backends: GitHub Copilot or Claude Code
+
+Each role (worker, evaluator, AGENTS.md writer) runs on its own backend, for example Copilot builds
+and Claude reviews. That spreads usage over two subscriptions and gives the evaluator a different
+model family.
+
+| | GitHub Copilot | Claude Code |
+|---|---|---|
+| Runs through | Copilot SDK (`GitHub.Copilot.SDK`) | Claude Code CLI in headless mode (`claude -p`) |
+| Billed to | Copilot plan (AI credits / premium requests) | Claude subscription (the CLI's reported cost is shown as an API-equivalent estimate) |
+| Token | variable named in the form (default `COPILOT_LOOP_TOKEN`) | `claude setup-token` token in the variable named in the form (default `CLAUDE_LOOP_TOKEN`) |
+| Models | listed live from your Copilot account | Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1 (if your plan has it) |
+
+Claude Code gets the token through `CLAUDE_CODE_OAUTH_TOKEN` only; `ANTHROPIC_API_KEY` and other
+credentials are removed from its environment, and `CLAUDE_CONFIG_DIR` points at an app-owned folder
+(`%LOCALAPPDATA%\LoopEngineering\claude-config`), so your own Claude Code login, global CLAUDE.md,
+plugins, hooks and MCP servers stay out of the loop. The evaluator and the AGENTS.md writer run with
+the edit tools disabled. Custom agents and skill folders are Copilot features and do not apply to
+Claude Code roles. An empty evaluator model only inherits the worker's model when both use the same
+backend.
+
+To create the Claude token, run `claude setup-token`, copy the `sk-ant-oat01-…` value and store it
+without leaving it in your shell history:
+
+```powershell
+[Environment]::SetEnvironmentVariable("CLAUDE_LOOP_TOKEN", (Get-Clipboard).Trim(), "User")
+```
+
 ## Model
 
 The **Model** dropdown lists the models your account can use (from the SDK's `ListModelsAsync`,

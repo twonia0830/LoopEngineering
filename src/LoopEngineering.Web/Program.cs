@@ -10,7 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
-builder.Services.AddSingleton<ILoopAgentFactory, CopilotLoopAgentFactory>();
+builder.Services.AddSingleton<ILoopAgentFactory, LoopAgentFactory>();
 builder.Services.AddSingleton<IGitHubIssueFetcher>(_ => new GitHubIssueFetcher(new HttpClient(new SocketsHttpHandler
 {
     PooledConnectionLifetime = TimeSpan.FromMinutes(5)

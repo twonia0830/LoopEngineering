@@ -4,20 +4,20 @@
 <div class="field">
     <span class="field-label">@Label</span>
     <div class="row model-row">
-        @if (Models.Models.Count == 0 && !Models.IsLoading)
+        @if (!IsClaude && Models.Models.Count == 0 && !Models.IsLoading)
         {
-            @* No list (token not set or load failed): fall back to typing the id. *@
+            @* No Copilot list (token not set or load failed): fall back to typing the id. *@
             <input value="@Model" @onchange="e => SetModel(e.Value?.ToString())" placeholder="@($"{EmptyLabel} (or type a model id)")" />
         }
         else
         {
-            <select value="@Model" @onchange="e => SetModel(e.Value?.ToString())" disabled="@(Models.IsLoading && Models.Models.Count == 0)">
+            <select value="@Model" @onchange="e => SetModel(e.Value?.ToString())" disabled="@(!IsClaude && Models.IsLoading && Models.Models.Count == 0)">
                 <option value="">@EmptyLabel</option>
-                @if (!string.IsNullOrWhiteSpace(Model) && Models.Find(Model) is null && Models.Models.Count > 0)
+                @if (!string.IsNullOrWhiteSpace(Model) && Find(Model) is null && Options.Count > 0)
                 {
                     <option value="@Model">⚠ @Model (not available)</option>
                 }
-                @foreach (var m in Models.Models)
+                @foreach (var m in Options)
                 {
                     <option value="@m.Id" disabled="@(!m.IsEnabled)">
                         @m.Name@(m.HasPrices ? $" · {m.PriceLabel}" : "")@(m.IsEnabled ? "" : " (disabled by policy)")
@@ -25,7 +25,7 @@
                 }
             </select>
         }
-        @if (ShowRefresh)
+        @if (ShowRefresh && !IsClaude)
         {
             <button class="btn small" title="Reload the model list" @onclick="Refresh" disabled="@(Models.IsLoading || TokenVariable is null)">
                 @if (Models.IsLoading) { <span class="spinner"></span> } else { <span>↻</span> }
@@ -46,8 +46,11 @@
 </label>
 
 @code {
-    /// <summary>Used when no specific model is chosen; the runtime accepts these for most models.</summary>
+    /// <summary>Used when no specific Copilot model is chosen; the runtime accepts these for most models.</summary>
     private static readonly IReadOnlyList<string> GenericEfforts = ["low", "medium", "high", "xhigh", "max"];
+
+    /// <summary>Levels the Claude Code CLI's --effort flag accepts.</summary>
+    private static readonly IReadOnlyList<string> ClaudeEfforts = ["low", "medium", "high", "max"];
 
     [Parameter] public string Label { get; set; } = "Model";
     [Parameter] public string EffortLabel { get; set; } = "Reasoning effort";
@@ -56,6 +59,9 @@
     [Parameter] public string Effort { get; set; } = "";
     [Parameter] public EventCallback<string> EffortChanged { get; set; }
 
+    /// <summary>Which runtime the role uses; decides the model list.</summary>
+    [Parameter] public AgentBackend Backend { get; set; } = AgentBackend.Copilot;
+
     /// <summary>Text of the empty option, e.g. "Default (Copilot decides)" or "Same as worker".</summary>
     [Parameter] public string EmptyLabel { get; set; } = "Default (Copilot decides)";
     [Parameter] public string EffortEmptyLabel { get; set; } = "default";
@@ -63,9 +69,15 @@
     /// <summary>Model whose efforts and prices apply while <see cref="Model"/> is empty (e.g. the worker's model).</summary>
     [Parameter] public string? InheritedModel { get; set; }
 
-    /// <summary>Token variable to load the list with; null when the variable isn't set.</summary>
+    /// <summary>Copilot token variable to load the list with; null when the variable isn't set.</summary>
     [Parameter] public string? TokenVariable { get; set; }
     [Parameter] public bool ShowRefresh { get; set; } = true;
+
+    private bool IsClaude => Backend == AgentBackend.ClaudeCode;
+
+    private IReadOnlyList<ModelOption> Options => IsClaude ? ClaudeCodeModels.All : Models.Models;
+
+    private ModelOption? Find(string? id) => IsClaude ? ClaudeCodeModels.Find(id) : Models.Find(id);
 
     private string EffectiveModel => string.IsNullOrWhiteSpace(Model) ? InheritedModel ?? "" : Model;
 
@@ -75,8 +87,11 @@
 
     private Task Refresh() => TokenVariable is null ? Task.CompletedTask : Models.RefreshAsync(TokenVariable, force: true);
 
-    private IReadOnlyList<string> EffortOptions() =>
-        Models.Find(EffectiveModel) is { IsAuto: false } model ? model.ReasoningEfforts : GenericEfforts;
+    private IReadOnlyList<string> EffortOptions() => Find(EffectiveModel) switch
+    {
+        { IsAuto: false } model => model.ReasoningEfforts,
+        _ => IsClaude ? ClaudeEfforts : GenericEfforts
+    };
 
     private async Task SetModel(string? value)
     {
@@ -88,7 +103,16 @@
 
     private string Hint()
     {
-        if (TokenVariable is null) return "Set the token variable to load the models your account can use.";
+        if (IsClaude)
+        {
+            var claude = ClaudeCodeModels.Find(EffectiveModel);
+            if (claude is null) return "Runs on your Claude subscription. Prices after the name: API-equivalent USD per 1M tokens (input / output).";
+            return $"{(string.IsNullOrWhiteSpace(Model) ? $"{claude.Name}: " : "")}API-equivalent USD per 1M tokens: input ${claude.InputCreditsPerMillion:#,0.##}" +
+                   (claude.CachedInputCreditsPerMillion is { } c ? $", cached input ${c:#,0.##}" : "") +
+                   $", output ${claude.OutputCreditsPerMillion:#,0.##}. On a subscription this counts against your plan's limits.";
+        }
+
+        if (TokenVariable is null) return "Set the Copilot token variable to load the models your account can use.";
         if (Models.IsLoading && Models.Models.Count == 0) return "Loading models…";
         if (Models.Error is not null && Models.Models.Count == 0) return $"Could not load models: {Models.Error}";
 

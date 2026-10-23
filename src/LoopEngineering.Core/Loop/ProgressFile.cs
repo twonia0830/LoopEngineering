@@ -43,9 +43,8 @@ public sealed class ProgressFile
         sb.AppendLine($"- **Max loops:** {config.MaxLoops}");
         sb.AppendLine($"- **Working folders:** {string.Join(", ", config.WorkingDirectories.Select(d => $"`{d}`"))}");
         sb.AppendLine($"- **Goal source:** {goalSource}");
-        sb.AppendLine($"- **Worker model:** {Describe(config.ModelFor(RoundPhase.Worker), config.ReasoningEffortFor(RoundPhase.Worker))}");
-        sb.AppendLine($"- **Evaluator model:** {Describe(config.ModelFor(RoundPhase.Evaluator), config.ReasoningEffortFor(RoundPhase.Evaluator))}" +
-                      (string.IsNullOrWhiteSpace(config.EvaluatorModel) ? " (same as worker)" : ""));
+        sb.AppendLine($"- **Worker:** {BackendName(config.BackendFor(RoundPhase.Worker))}, {Describe(config.ModelFor(RoundPhase.Worker), config.ReasoningEffortFor(RoundPhase.Worker))}");
+        sb.AppendLine($"- **Evaluator:** {BackendName(config.BackendFor(RoundPhase.Evaluator))}, {Describe(config.ModelFor(RoundPhase.Evaluator), config.ReasoningEffortFor(RoundPhase.Evaluator))}");
         sb.AppendLine($"- **Criteria source:** {(config.CriteriaSource == CriteriaSource.File ? $"file `{config.CriteriaFilePath}`" : "text")}");
         if (!string.IsNullOrWhiteSpace(config.ActiveAgent)) sb.AppendLine($"- **Agent:** {config.ActiveAgent}");
         if (config.SkillDirectories.Count > 0) sb.AppendLine($"- **Skill directories:** {string.Join(", ", config.SkillDirectories.Select(d => $"`{d}`"))}");
@@ -131,6 +130,8 @@ public sealed class ProgressFile
 
     private static string PhaseLabel(TokenUsage usage) =>
         usage.Models.Count == 0 ? "-" : usage.ModelsLabel + (usage.AiCredits is { } c ? $" ({c:0.###} credits)" : "");
+
+    private static string BackendName(AgentBackend backend) => backend == AgentBackend.ClaudeCode ? "Claude Code" : "GitHub Copilot";
 
     private static string Describe(string model, string effort) =>
         (string.IsNullOrWhiteSpace(model) ? "(default)" : model) + (string.IsNullOrWhiteSpace(effort) ? "" : $", {effort} reasoning");

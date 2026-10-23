@@ -51,7 +51,7 @@ public sealed class EvaluatorModelTests
             Assert.Equal(0.8, round.Usage.AiCredits!.Value, precision: 6);
 
             var progress = File.ReadAllText(runner.GetSnapshot().ProgressFilePath!);
-            Assert.Contains("- **Evaluator model:** claude-haiku-4.5", progress);
+            Assert.Contains("- **Evaluator:** GitHub Copilot, claude-haiku-4.5", progress);
             Assert.Contains("evaluator claude-haiku-4.5 ×1 (0.5 credits)", progress);
         }
         finally

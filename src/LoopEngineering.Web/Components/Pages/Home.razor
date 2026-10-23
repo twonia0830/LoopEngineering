@@ -152,17 +152,33 @@
 
             <div class="model-group">
                 <h3>Worker</h3>
+                <label>Runs on
+                    <select @bind="_config.WorkerBackend" @bind:after="OnBackendsChanged">
+                        <option value="@AgentBackend.Copilot">GitHub Copilot</option>
+                        <option value="@AgentBackend.ClaudeCode">Claude Code</option>
+                    </select>
+                </label>
                 <ModelPicker Label="Model" @bind-Model="_config.Model" @bind-Effort="_config.ReasoningEffort"
+                             Backend="_config.WorkerBackend" EmptyLabel="@DefaultLabel(_config.WorkerBackend)"
                              TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)" />
             </div>
 
             <div class="model-group">
                 <h3>Evaluator</h3>
+                <label>Runs on
+                    <select @bind="_config.EvaluatorBackend" @bind:after="OnBackendsChanged">
+                        <option value="@AgentBackend.Copilot">GitHub Copilot</option>
+                        <option value="@AgentBackend.ClaudeCode">Claude Code</option>
+                    </select>
+                </label>
+                @{ var evaluatorInherits = _config.EvaluatorBackend == _config.WorkerBackend; }
                 <ModelPicker Label="Model" @bind-Model="_config.EvaluatorModel" @bind-Effort="_config.EvaluatorReasoningEffort"
-                             EmptyLabel="Same as worker" EffortEmptyLabel="@(string.IsNullOrWhiteSpace(_config.EvaluatorModel) ? "same as worker" : "default")"
-                             InheritedModel="@_config.Model" ShowRefresh="false"
+                             Backend="_config.EvaluatorBackend"
+                             EmptyLabel="@(evaluatorInherits ? "Same as worker" : DefaultLabel(_config.EvaluatorBackend))"
+                             EffortEmptyLabel="@(evaluatorInherits && string.IsNullOrWhiteSpace(_config.EvaluatorModel) ? "same as worker" : "default")"
+                             InheritedModel="@(evaluatorInherits ? _config.Model : null)" ShowRefresh="false"
                              TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)" />
-                <small class="group-note">Tip: a model from another provider is less likely to share the worker's blind spots.</small>
+                <small class="group-note">Tip: a model from another provider, or another subscription, is less likely to share the worker's blind spots.</small>
             </div>
 
             <div class="model-group">
@@ -192,19 +208,54 @@
                         <input type="checkbox" @bind="_config.RegenerateAgentsMd" />
                         Regenerate AGENTS.md even where it exists (next run only; the old one is kept as reference)
                     </label>
+                    <label>Runs on
+                        <select @bind="_config.AgentsMdBackend" @bind:after="OnBackendsChanged">
+                            <option value="@AgentsMdBackendChoice.SameAsEvaluator">Same as evaluator</option>
+                            <option value="@AgentsMdBackendChoice.Copilot">GitHub Copilot</option>
+                            <option value="@AgentsMdBackendChoice.ClaudeCode">Claude Code</option>
+                        </select>
+                    </label>
+                    var guideBackend = _config.BackendFor(RoundPhase.Guide);
+                    var guideInherits = guideBackend == _config.EvaluatorBackend;
                     <ModelPicker Label="Model that writes it" @bind-Model="_config.AgentsMdModel" @bind-Effort="_config.AgentsMdReasoningEffort"
-                                 EmptyLabel="Same as evaluator" EffortEmptyLabel="@(string.IsNullOrWhiteSpace(_config.AgentsMdModel) ? "same as evaluator" : "default")"
-                                 InheritedModel="@(string.IsNullOrWhiteSpace(_config.EvaluatorModel) ? _config.Model : _config.EvaluatorModel)" ShowRefresh="false"
+                                 Backend="guideBackend"
+                                 EmptyLabel="@(guideInherits ? "Same as evaluator" : DefaultLabel(guideBackend))"
+                                 EffortEmptyLabel="@(guideInherits && string.IsNullOrWhiteSpace(_config.AgentsMdModel) ? "same as evaluator" : "default")"
+                                 InheritedModel="@(guideInherits ? _config.ModelFor(RoundPhase.Evaluator) : null)" ShowRefresh="false"
                                  TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)" />
                 }
             </div>
 
-            <label>Token environment variable
+            <label>GitHub Copilot token environment variable
                 <input @bind="_config.TokenEnvironmentVariable" @bind:after="OnTokenVariableChanged" />
-                <small class="@(_tokenFound ? "ok-text" : "err-text")">
-                    @(_tokenFound ? "✓ Variable is set. Only this token is passed to the SDK." : "✗ Variable not set. Set it to a GitHub token with Copilot access.")
+                <small class="@(_tokenFound ? "ok-text" : (_config.UsesBackend(AgentBackend.Copilot) ? "err-text" : ""))">
+                    @(_tokenFound ? "✓ Variable is set. Only this token is passed to the Copilot SDK."
+                        : _config.UsesBackend(AgentBackend.Copilot) ? "✗ Variable not set. Set it to a GitHub token with Copilot access."
+                        : "Not set. Only needed for Copilot roles and the credits header.")
                 </small>
             </label>
+
+            @if (_config.UsesBackend(AgentBackend.ClaudeCode))
+            {
+                <div class="model-group">
+                    <h3>Claude Code</h3>
+                    <label>Claude token environment variable
+                        <input @bind="_config.ClaudeTokenEnvironmentVariable" @bind:after="RefreshClaudeStatus" />
+                        <small class="@(_claudeTokenFound ? "ok-text" : "err-text")">
+                            @(_claudeTokenFound ? "✓ Variable is set. Only this token is passed to Claude Code."
+                                : "✗ Variable not set. Run `claude setup-token` and store the token in this variable.")
+                        </small>
+                    </label>
+                    <label>Claude Code CLI path
+                        <input @bind="_config.ClaudeCliPath" @bind:after="RefreshClaudeStatus" placeholder="(find claude on PATH)" />
+                        <small class="@(_claudeCliError is null ? "ok-text" : "err-text")">@(_claudeCliError ?? $"✓ {_claudeCliPath}")</small>
+                    </label>
+                    <small class="group-note">
+                        Claude Code runs with its own settings folder, so your personal CLAUDE.md, plugins, hooks and MCP servers stay out of the loop.
+                        Copilot-only features (custom agents, skill folders) do not apply to Claude Code roles.
+                    </small>
+                </div>
+            }
 
             <details open="@(_skillDirs.Length + _agentDirs.Length > 0 || _config.CustomAgents.Count > 0)">
                 <summary>Skills &amp; agents</summary>
@@ -269,7 +320,7 @@
                 <span class="value">@(_snap.TotalUsage.IsEmpty ? "—" : TokenUsage.Format(_snap.TotalUsage.TotalTokens))</span>
                 @if (!_snap.TotalUsage.IsEmpty)
                 {
-                    <span class="sub" title="@_snap.TotalUsage.ToString()">@(_snap.TotalUsage.AiCredits is { } credits ? $"{credits:0.###} credits" : $"{_snap.TotalUsage.PremiumRequests:0.##} premium req") · @_snap.TotalUsage.UserRequests prompts</span>
+                    <span class="sub" title="@_snap.TotalUsage.ToString()">@(_snap.TotalUsage.AiCredits is { } credits ? $"{credits:0.###} credits" : $"{_snap.TotalUsage.PremiumRequests:0.##} premium req")@(_snap.TotalUsage.EstimatedCostUsd is { } usd ? $" · Claude ≈${usd:0.##}" : "") · @_snap.TotalUsage.UserRequests prompts</span>
                 }
             </div>
         </div>
@@ -391,6 +442,7 @@
         _skillDirs = string.Join(Environment.NewLine, _config.SkillDirectories);
         _agentDirs = string.Join(Environment.NewLine, _config.AgentDirectories);
         RefreshTokenStatus();
+        RefreshClaudeStatus();
         Quota.TokenVariable = _config.TokenEnvironmentVariable;
         if (_tokenFound && Quota.Current.FetchedAt is null) _ = Quota.RefreshAsync(force: false);
         Models.Changed += OnModelsChanged;
@@ -436,10 +488,28 @@
 
         _errors = _config.Validate();
         RefreshTokenStatus();
-        if (!_tokenFound) _errors.Add($"Environment variable '{_config.TokenEnvironmentVariable}' is not set.");
-        foreach (var (role, id) in new[] { ("Worker", _config.Model), ("Evaluator", _config.EvaluatorModel), ("AGENTS.md", _config.UseAgentsMd ? _config.AgentsMdModel : "") })
+        if (!_tokenFound && _config.UsesBackend(AgentBackend.Copilot))
+            _errors.Add($"Environment variable '{_config.TokenEnvironmentVariable}' is not set.");
+        if (_config.UsesBackend(AgentBackend.ClaudeCode))
         {
-            if (string.IsNullOrWhiteSpace(id) || Models.Models.Count == 0) continue;
+            RefreshClaudeStatus();
+            if (!_claudeTokenFound) _errors.Add($"Environment variable '{_config.ClaudeTokenEnvironmentVariable}' is not set (Claude token from `claude setup-token`).");
+            if (_claudeCliError is not null) _errors.Add(_claudeCliError);
+        }
+        foreach (var (role, id, phase) in new[]
+                 {
+                     ("Worker", _config.Model, RoundPhase.Worker),
+                     ("Evaluator", _config.EvaluatorModel, RoundPhase.Evaluator),
+                     ("AGENTS.md", _config.UseAgentsMd ? _config.AgentsMdModel : "", RoundPhase.Guide)
+                 })
+        {
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            if (_config.BackendFor(phase) == AgentBackend.ClaudeCode)
+            {
+                if (ClaudeCodeModels.Find(id) is null) _errors.Add($"{role} model '{id}' is not a Claude model. Pick one from the list.");
+                continue;
+            }
+            if (Models.Models.Count == 0) continue;
             var model = Models.Find(id);
             if (model is null) _errors.Add($"{role} model '{id}' is not available to your account. Pick one from the list.");
             else if (!model.IsEnabled) _errors.Add($"{role} model '{model.Name}' is disabled by policy.");
@@ -478,6 +548,42 @@
     // ---------- models ----------
 
     private void OnModelsChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private static string DefaultLabel(AgentBackend backend) =>
+        backend == AgentBackend.ClaudeCode ? "Default (Claude Code decides)" : "Default (Copilot decides)";
+
+    /// <summary>A model id from one backend means nothing to the other: clear models that don't fit after a switch.</summary>
+    private void OnBackendsChanged()
+    {
+        bool Fits(string id, AgentBackend backend) => string.IsNullOrWhiteSpace(id) ||
+            (backend == AgentBackend.ClaudeCode ? ClaudeCodeModels.Find(id) is not null : ClaudeCodeModels.Find(id) is null);
+
+        if (!Fits(_config.Model, _config.WorkerBackend)) { _config.Model = ""; _config.ReasoningEffort = ""; }
+        if (!Fits(_config.EvaluatorModel, _config.EvaluatorBackend)) { _config.EvaluatorModel = ""; _config.EvaluatorReasoningEffort = ""; }
+        if (!Fits(_config.AgentsMdModel, _config.BackendFor(RoundPhase.Guide))) { _config.AgentsMdModel = ""; _config.AgentsMdReasoningEffort = ""; }
+        RefreshClaudeStatus();
+    }
+
+    // ---------- Claude Code ----------
+
+    private bool _claudeTokenFound;
+    private string? _claudeCliPath;
+    private string? _claudeCliError;
+
+    private void RefreshClaudeStatus()
+    {
+        _claudeTokenFound = ClaudeCli.ResolveToken(_config.ClaudeTokenEnvironmentVariable) is not null;
+        try
+        {
+            _claudeCliPath = ClaudeCli.ResolvePath(_config.ClaudeCliPath);
+            _claudeCliError = null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _claudeCliPath = null;
+            _claudeCliError = ex.Message;
+        }
+    }
 
     private Task RefreshModels(bool force) => Models.RefreshAsync(_config.TokenEnvironmentVariable, force);
 

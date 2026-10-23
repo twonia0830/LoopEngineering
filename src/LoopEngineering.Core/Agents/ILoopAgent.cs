@@ -28,6 +28,9 @@ public interface IAgentObserver
 
     /// <summary>Billing for the finished turn as reported by the runtime: premium requests, prompts, and AI credits (if known).</summary>
     void OnBilling(double premiumRequests, long userRequests, double? aiCredits);
+
+    /// <summary>Claude Code's reported cost for the finished turn (USD at API prices).</summary>
+    void OnEstimatedCost(double usd);
     void OnLog(string level, string message);
 }
 

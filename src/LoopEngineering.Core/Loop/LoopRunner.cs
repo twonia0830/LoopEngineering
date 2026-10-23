@@ -414,8 +414,12 @@ public sealed class LoopRunner
         }
     }
 
-    private static string DescribeCost(TokenUsage usage) =>
-        usage.AiCredits is { } credits ? $"{credits:0.###} credits" : $"{TokenUsage.Format(usage.TotalTokens)} tokens";
+    private static string DescribeCost(TokenUsage usage) => usage switch
+    {
+        { AiCredits: { } credits } => $"{credits:0.###} credits",
+        { EstimatedCostUsd: { } usd } => $"Claude ≈${usd:0.###}",
+        _ => $"{TokenUsage.Format(usage.TotalTokens)} tokens"
+    };
 
     private void FinishRound(RoundResult result, ProgressFile progress, LoopConfig config)
     {
@@ -557,6 +561,16 @@ public sealed class LoopRunner
             {
                 round.Usage.AddBilling(premiumRequests, userRequests, aiCredits);
                 PhaseUsage.AddBilling(premiumRequests, userRequests, aiCredits);
+            }
+            runner.Notify();
+        }
+
+        public void OnEstimatedCost(double usd)
+        {
+            lock (runner._gate)
+            {
+                round.Usage.AddEstimatedCost(usd);
+                PhaseUsage.AddEstimatedCost(usd);
             }
             runner.Notify();
         }

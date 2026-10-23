@@ -9,8 +9,12 @@ public sealed record ModelOption(
     string? DefaultReasoningEffort,
     double? InputCreditsPerMillion,
     double? CachedInputCreditsPerMillion,
-    double? OutputCreditsPerMillion)
+    double? OutputCreditsPerMillion,
+    string PriceUnit = "ai_credits")
 {
+    /// <summary>True when the prices are API-equivalent USD (Claude Code) rather than Copilot AI credits.</summary>
+    public bool PricesInUsd => PriceUnit == "usd";
+
     /// <summary>The runtime's automatic model choice.</summary>
     public bool IsAuto => Id == "auto";
 
@@ -20,5 +24,7 @@ public sealed record ModelOption(
     public bool HasPrices => InputCreditsPerMillion is not null && OutputCreditsPerMillion is not null;
 
     /// <summary>e.g. "200 / 1,000" (input / output AI credits per 1M tokens).</summary>
-    public string PriceLabel => HasPrices ? $"{InputCreditsPerMillion:#,0.##} / {OutputCreditsPerMillion:#,0.##}" : "";
+    public string PriceLabel => !HasPrices ? ""
+        : PricesInUsd ? $"${InputCreditsPerMillion:#,0.##} / ${OutputCreditsPerMillion:#,0.##}"
+        : $"{InputCreditsPerMillion:#,0.##} / {OutputCreditsPerMillion:#,0.##}";
 }
