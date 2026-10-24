@@ -139,7 +139,12 @@ public sealed class LoopRunner
 
             await using var agent = _agentFactory.Create(config);
             await agent.StartAsync(ct);
-            AddLog("info", "Copilot runtime started.");
+            AddLog("info", "Agents started: " + string.Join(", ", Enum.GetValues<AgentBackend>().Where(config.UsesBackend).Select(b => b switch
+            {
+                AgentBackend.ClaudeCode => "Claude Code",
+                AgentBackend.Antigravity => "Antigravity",
+                _ => "GitHub Copilot"
+            })) + ".");
 
             if (config.UseAgentsMd) await CreateMissingGuidesAsync(agent, config, progress, ct);
 

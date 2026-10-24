@@ -131,7 +131,12 @@ public sealed class ProgressFile
     private static string PhaseLabel(TokenUsage usage) =>
         usage.Models.Count == 0 ? "-" : usage.ModelsLabel + (usage.AiCredits is { } c ? $" ({c:0.###} credits)" : "");
 
-    private static string BackendName(AgentBackend backend) => backend == AgentBackend.ClaudeCode ? "Claude Code" : "GitHub Copilot";
+    private static string BackendName(AgentBackend backend) => backend switch
+    {
+        AgentBackend.ClaudeCode => "Claude Code",
+        AgentBackend.Antigravity => "Antigravity",
+        _ => "GitHub Copilot"
+    };
 
     private static string Describe(string model, string effort) =>
         (string.IsNullOrWhiteSpace(model) ? "(default)" : model) + (string.IsNullOrWhiteSpace(effort) ? "" : $", {effort} reasoning");

@@ -49,18 +49,19 @@ The token value is never shown in the UI or saved to `App_Data/last-config.json`
 - **Progress file folder** (optional) keeps `{GoalName}_progress.md` out of your repos; by default it
   goes into the primary folder.
 
-## Backends: GitHub Copilot or Claude Code
+## Backends: GitHub Copilot, Claude Code or Antigravity
 
 Each role (worker, evaluator, AGENTS.md writer) runs on its own backend, for example Copilot builds
 and Claude reviews. That spreads usage over two subscriptions and gives the evaluator a different
 model family.
 
-| | GitHub Copilot | Claude Code |
-|---|---|---|
-| Runs through | Copilot SDK (`GitHub.Copilot.SDK`) | Claude Code CLI in headless mode (`claude -p`) |
-| Billed to | Copilot plan (AI credits / premium requests) | Claude subscription (the CLI's reported cost is shown as an API-equivalent estimate) |
-| Token | variable named in the form (default `COPILOT_LOOP_TOKEN`) | `claude setup-token` token in the variable named in the form (default `CLAUDE_LOOP_TOKEN`) |
-| Models | listed live from your Copilot account | Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1 (if your plan has it) |
+| | GitHub Copilot | Claude Code | Antigravity (Google) |
+|---|---|---|---|
+| Runs through | Copilot SDK (`GitHub.Copilot.SDK`) | Claude Code CLI, headless (`claude -p`) | Antigravity CLI, headless (`agy`, stream-json in and out) |
+| Billed to | Copilot plan (AI credits / premium requests) | Claude subscription (reported cost shown as an API-equivalent estimate) | Google AI Pro / Ultra plan (tokens shown, no price) |
+| Credential | token from the variable named in the form (default `COPILOT_LOOP_TOKEN`) | `claude setup-token` token from the variable named in the form (default `CLAUDE_LOOP_TOKEN`) | agy's own saved Google sign-in (agy has no token option; run `agy` once to sign in) |
+| Models | listed live from your Copilot account | Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1 (if your plan has it) | listed live with `agy models`; the effort is part of the variant (e.g. `gemini-4-argon-high`) |
+| Edits blocked for evaluator / AGENTS.md writer | prompt only | yes (edit tools disabled) | prompt only |
 
 Claude Code gets the token through `CLAUDE_CODE_OAUTH_TOKEN` only; `ANTHROPIC_API_KEY` and other
 credentials are removed from its environment, and `CLAUDE_CONFIG_DIR` points at an app-owned folder
@@ -69,6 +70,13 @@ plugins, hooks and MCP servers stay out of the loop. The evaluator and the AGENT
 the edit tools disabled. Custom agents and skill folders are Copilot features and do not apply to
 Claude Code roles. An empty evaluator model only inherits the worker's model when both use the same
 backend.
+
+Antigravity runs with an app-owned home folder (`%LOCALAPPDATA%\LoopEngineering\antigravity-home`) so
+your `~/.gemini` setup (GEMINI.md, plugins, MCP servers, settings) stays out of the loop; the saved
+sign-in lives in the Windows credential store and keeps working. The NuGet cache, dotnet home and
+global git config still point at your real profile so commands the agent runs behave normally. A
+`GEMINI_API_KEY` is removed from its environment so runs use the plan, not API billing. Isolation can
+be turned off in the form.
 
 To create the Claude token, run `claude setup-token`, copy the `sk-ant-oat01-…` value and store it
 without leaving it in your shell history:

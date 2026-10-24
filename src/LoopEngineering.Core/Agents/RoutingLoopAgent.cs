@@ -1,3 +1,4 @@
+using LoopEngineering.Core.Antigravity;
 using LoopEngineering.Core.ClaudeCode;
 using LoopEngineering.Core.Copilot;
 using LoopEngineering.Core.Models;
@@ -10,7 +11,8 @@ public sealed class LoopAgentFactory : ILoopAgentFactory
     public ILoopAgent Create(LoopConfig config) => new RoutingLoopAgent(config, new Dictionary<AgentBackend, Func<ILoopAgent>>
     {
         [AgentBackend.Copilot] = () => new CopilotLoopAgent(config),
-        [AgentBackend.ClaudeCode] = () => new ClaudeCodeAgent(config)
+        [AgentBackend.ClaudeCode] = () => new ClaudeCodeAgent(config),
+        [AgentBackend.Antigravity] = () => new AntigravityAgent(config)
     });
 }
 

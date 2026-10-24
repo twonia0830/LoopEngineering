@@ -6,6 +6,7 @@
 @inject IJSRuntime JS
 @inject AccountQuotaService Quota
 @inject ModelCatalogService Models
+@inject AntigravityModelCatalog AgyModels
 
 <PageTitle>Loop Engineering</PageTitle>
 
@@ -156,11 +157,13 @@
                     <select @bind="_config.WorkerBackend" @bind:after="OnBackendsChanged">
                         <option value="@AgentBackend.Copilot">GitHub Copilot</option>
                         <option value="@AgentBackend.ClaudeCode">Claude Code</option>
+                        <option value="@AgentBackend.Antigravity">Antigravity (Google)</option>
                     </select>
                 </label>
                 <ModelPicker Label="Model" @bind-Model="_config.Model" @bind-Effort="_config.ReasoningEffort"
                              Backend="_config.WorkerBackend" EmptyLabel="@DefaultLabel(_config.WorkerBackend)"
-                             TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)" />
+                             TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)"
+                             AntigravityCliPath="@_config.AntigravityCliPath" IsolateAntigravity="_config.IsolateAntigravity" />
             </div>
 
             <div class="model-group">
@@ -169,6 +172,7 @@
                     <select @bind="_config.EvaluatorBackend" @bind:after="OnBackendsChanged">
                         <option value="@AgentBackend.Copilot">GitHub Copilot</option>
                         <option value="@AgentBackend.ClaudeCode">Claude Code</option>
+                        <option value="@AgentBackend.Antigravity">Antigravity (Google)</option>
                     </select>
                 </label>
                 @{ var evaluatorInherits = _config.EvaluatorBackend == _config.WorkerBackend; }
@@ -177,7 +181,8 @@
                              EmptyLabel="@(evaluatorInherits ? "Same as worker" : DefaultLabel(_config.EvaluatorBackend))"
                              EffortEmptyLabel="@(evaluatorInherits && string.IsNullOrWhiteSpace(_config.EvaluatorModel) ? "same as worker" : "default")"
                              InheritedModel="@(evaluatorInherits ? _config.Model : null)" ShowRefresh="false"
-                             TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)" />
+                             TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)"
+                             AntigravityCliPath="@_config.AntigravityCliPath" IsolateAntigravity="_config.IsolateAntigravity" />
                 <small class="group-note">Tip: a model from another provider, or another subscription, is less likely to share the worker's blind spots.</small>
             </div>
 
@@ -213,6 +218,7 @@
                             <option value="@AgentsMdBackendChoice.SameAsEvaluator">Same as evaluator</option>
                             <option value="@AgentsMdBackendChoice.Copilot">GitHub Copilot</option>
                             <option value="@AgentsMdBackendChoice.ClaudeCode">Claude Code</option>
+                            <option value="@AgentsMdBackendChoice.Antigravity">Antigravity (Google)</option>
                         </select>
                     </label>
                     var guideBackend = _config.BackendFor(RoundPhase.Guide);
@@ -222,7 +228,8 @@
                                  EmptyLabel="@(guideInherits ? "Same as evaluator" : DefaultLabel(guideBackend))"
                                  EffortEmptyLabel="@(guideInherits && string.IsNullOrWhiteSpace(_config.AgentsMdModel) ? "same as evaluator" : "default")"
                                  InheritedModel="@(guideInherits ? _config.ModelFor(RoundPhase.Evaluator) : null)" ShowRefresh="false"
-                                 TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)" />
+                                 TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)"
+                             AntigravityCliPath="@_config.AntigravityCliPath" IsolateAntigravity="_config.IsolateAntigravity" />
                 }
             </div>
 
@@ -253,6 +260,27 @@
                     <small class="group-note">
                         Claude Code runs with its own settings folder, so your personal CLAUDE.md, plugins, hooks and MCP servers stay out of the loop.
                         Copilot-only features (custom agents, skill folders) do not apply to Claude Code roles.
+                    </small>
+                </div>
+            }
+
+            @if (_config.UsesBackend(AgentBackend.Antigravity))
+            {
+                <div class="model-group">
+                    <h3>Antigravity (Google)</h3>
+                    <label>Antigravity CLI path
+                        <input @bind="_config.AntigravityCliPath" @bind:after="OnAntigravitySettingsChanged" placeholder="(find agy on PATH)" />
+                        <small class="@(_agyCliError is null ? "ok-text" : "err-text")">@(_agyCliError ?? $"✓ {_agyCliPath}")</small>
+                    </label>
+                    <label class="inline">
+                        <input type="checkbox" @bind="_config.IsolateAntigravity" @bind:after="OnAntigravitySettingsChanged" />
+                        Keep my personal ~/.gemini setup (GEMINI.md, plugins, MCP) out of the loop
+                    </label>
+                    <small class="group-note">
+                        Sign-in: agy has no token option, so it uses its own saved Google sign-in (run <code>agy</code> once in a terminal).
+                        That is unlike the Copilot and Claude roles, which only use the token from the variable you name.
+                        @(AgyModels.Error is { } agyError ? $" Model list: {agyError}" : AgyModels.Models.Count > 0 ? $" Signed in: {AgyModels.Models.Count} models available." : "")
+                        Edits by the evaluator and AGENTS.md writer are only discouraged by the prompt here (agy has no way to disable edit tools).
                     </small>
                 </div>
             }
@@ -443,6 +471,8 @@
         _agentDirs = string.Join(Environment.NewLine, _config.AgentDirectories);
         RefreshTokenStatus();
         RefreshClaudeStatus();
+        AgyModels.Changed += OnModelsChanged;
+        OnAntigravitySettingsChanged();
         Quota.TokenVariable = _config.TokenEnvironmentVariable;
         if (_tokenFound && Quota.Current.FetchedAt is null) _ = Quota.RefreshAsync(force: false);
         Models.Changed += OnModelsChanged;
@@ -496,6 +526,12 @@
             if (!_claudeTokenFound) _errors.Add($"Environment variable '{_config.ClaudeTokenEnvironmentVariable}' is not set (Claude token from `claude setup-token`).");
             if (_claudeCliError is not null) _errors.Add(_claudeCliError);
         }
+        if (_config.UsesBackend(AgentBackend.Antigravity))
+        {
+            RefreshAntigravityStatus();
+            if (_agyCliError is not null) _errors.Add(_agyCliError);
+            else if (AgyModels.Error is { } agyError && AgyModels.Models.Count == 0) _errors.Add($"Antigravity: {agyError}");
+        }
         foreach (var (role, id, phase) in new[]
                  {
                      ("Worker", _config.Model, RoundPhase.Worker),
@@ -507,6 +543,12 @@
             if (_config.BackendFor(phase) == AgentBackend.ClaudeCode)
             {
                 if (ClaudeCodeModels.Find(id) is null) _errors.Add($"{role} model '{id}' is not a Claude model. Pick one from the list.");
+                continue;
+            }
+            if (_config.BackendFor(phase) == AgentBackend.Antigravity)
+            {
+                if (AgyModels.Models.Count > 0 && AgyModels.Find(id) is null)
+                    _errors.Add($"{role} model '{id}' is not available in Antigravity (see `agy models`).");
                 continue;
             }
             if (Models.Models.Count == 0) continue;
@@ -549,19 +591,55 @@
 
     private void OnModelsChanged() => _ = InvokeAsync(StateHasChanged);
 
-    private static string DefaultLabel(AgentBackend backend) =>
-        backend == AgentBackend.ClaudeCode ? "Default (Claude Code decides)" : "Default (Copilot decides)";
+    private static string DefaultLabel(AgentBackend backend) => backend switch
+    {
+        AgentBackend.ClaudeCode => "Default (Claude Code decides)",
+        AgentBackend.Antigravity => "Default (Antigravity decides)",
+        _ => "Default (Copilot decides)"
+    };
 
     /// <summary>A model id from one backend means nothing to the other: clear models that don't fit after a switch.</summary>
     private void OnBackendsChanged()
     {
-        bool Fits(string id, AgentBackend backend) => string.IsNullOrWhiteSpace(id) ||
-            (backend == AgentBackend.ClaudeCode ? ClaudeCodeModels.Find(id) is not null : ClaudeCodeModels.Find(id) is null);
+        bool Fits(string id, AgentBackend backend) => string.IsNullOrWhiteSpace(id) || backend switch
+        {
+            AgentBackend.ClaudeCode => ClaudeCodeModels.Find(id) is not null,
+            AgentBackend.Antigravity => AgyModels.Models.Count == 0 || AgyModels.Find(id) is not null,
+            _ => ClaudeCodeModels.Find(id) is null && AgyModels.Find(id) is null
+        };
 
         if (!Fits(_config.Model, _config.WorkerBackend)) { _config.Model = ""; _config.ReasoningEffort = ""; }
         if (!Fits(_config.EvaluatorModel, _config.EvaluatorBackend)) { _config.EvaluatorModel = ""; _config.EvaluatorReasoningEffort = ""; }
         if (!Fits(_config.AgentsMdModel, _config.BackendFor(RoundPhase.Guide))) { _config.AgentsMdModel = ""; _config.AgentsMdReasoningEffort = ""; }
         RefreshClaudeStatus();
+        OnAntigravitySettingsChanged();
+    }
+
+    // ---------- Antigravity ----------
+
+    private string? _agyCliPath;
+    private string? _agyCliError;
+
+    private void RefreshAntigravityStatus()
+    {
+        try
+        {
+            _agyCliPath = AntigravityCli.ResolvePath(_config.AntigravityCliPath);
+            _agyCliError = null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _agyCliPath = null;
+            _agyCliError = ex.Message;
+        }
+    }
+
+    /// <summary>Re-checks the CLI and (re)loads `agy models` when an Antigravity role is in use. Listing models is free.</summary>
+    private void OnAntigravitySettingsChanged()
+    {
+        RefreshAntigravityStatus();
+        if (_agyCliError is null && _config.UsesBackend(AgentBackend.Antigravity))
+            _ = AgyModels.RefreshAsync(_config.AntigravityCliPath, _config.IsolateAntigravity);
     }
 
     // ---------- Claude Code ----------
@@ -763,6 +841,7 @@
     {
         Runner.Changed -= OnRunnerChanged;
         Models.Changed -= OnModelsChanged;
+        AgyModels.Changed -= OnModelsChanged;
         _refreshTimer?.Dispose();
     }
 }

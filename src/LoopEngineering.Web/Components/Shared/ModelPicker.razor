@@ -1,17 +1,18 @@
 @implements IDisposable
 @inject ModelCatalogService Models
+@inject AntigravityModelCatalog AgyModels
 
 <div class="field">
     <span class="field-label">@Label</span>
     <div class="row model-row">
-        @if (!IsClaude && Models.Models.Count == 0 && !Models.IsLoading)
+        @if (!IsClaude && Options.Count == 0 && !ListLoading)
         {
-            @* No Copilot list (token not set or load failed): fall back to typing the id. *@
+            @* No live list (not signed in, token not set or load failed): fall back to typing the id. *@
             <input value="@Model" @onchange="e => SetModel(e.Value?.ToString())" placeholder="@($"{EmptyLabel} (or type a model id)")" />
         }
         else
         {
-            <select value="@Model" @onchange="e => SetModel(e.Value?.ToString())" disabled="@(!IsClaude && Models.IsLoading && Models.Models.Count == 0)">
+            <select value="@Model" @onchange="e => SetModel(e.Value?.ToString())" disabled="@(!IsClaude && ListLoading && Options.Count == 0)">
                 <option value="">@EmptyLabel</option>
                 @if (!string.IsNullOrWhiteSpace(Model) && Find(Model) is null && Options.Count > 0)
                 {
@@ -27,8 +28,8 @@
         }
         @if (ShowRefresh && !IsClaude)
         {
-            <button class="btn small" title="Reload the model list" @onclick="Refresh" disabled="@(Models.IsLoading || TokenVariable is null)">
-                @if (Models.IsLoading) { <span class="spinner"></span> } else { <span>↻</span> }
+            <button class="btn small" title="Reload the model list" @onclick="Refresh" disabled="@(ListLoading || (!IsAntigravity && TokenVariable is null))">
+                @if (ListLoading) { <span class="spinner"></span> } else { <span>↻</span> }
             </button>
         }
     </div>
@@ -37,7 +38,7 @@
 
 <label>@EffortLabel
     <select value="@Effort" @onchange="e => EffortChanged.InvokeAsync(e.Value?.ToString() ?? string.Empty)" disabled="@(EffortOptions().Count == 0)">
-        <option value="">@(EffortOptions().Count == 0 ? "not supported by this model" : EffortEmptyLabel)</option>
+        <option value="">@(IsAntigravity ? "set by the model variant (low / medium / high)" : EffortOptions().Count == 0 ? "not supported by this model" : EffortEmptyLabel)</option>
         @foreach (var effort in EffortOptions())
         {
             <option value="@effort">@effort</option>
@@ -71,23 +72,46 @@
 
     /// <summary>Copilot token variable to load the list with; null when the variable isn't set.</summary>
     [Parameter] public string? TokenVariable { get; set; }
+
+    /// <summary>Antigravity CLI path setting and isolation flag, used to reload `agy models`.</summary>
+    [Parameter] public string AntigravityCliPath { get; set; } = "";
+    [Parameter] public bool IsolateAntigravity { get; set; } = true;
     [Parameter] public bool ShowRefresh { get; set; } = true;
 
     private bool IsClaude => Backend == AgentBackend.ClaudeCode;
+    private bool IsAntigravity => Backend == AgentBackend.Antigravity;
 
-    private IReadOnlyList<ModelOption> Options => IsClaude ? ClaudeCodeModels.All : Models.Models;
+    private IReadOnlyList<ModelOption> Options => Backend switch
+    {
+        AgentBackend.ClaudeCode => ClaudeCodeModels.All,
+        AgentBackend.Antigravity => AgyModels.Models,
+        _ => Models.Models
+    };
 
-    private ModelOption? Find(string? id) => IsClaude ? ClaudeCodeModels.Find(id) : Models.Find(id);
+    private bool ListLoading => IsAntigravity ? AgyModels.IsLoading : !IsClaude && Models.IsLoading;
+
+    private ModelOption? Find(string? id) => Backend switch
+    {
+        AgentBackend.ClaudeCode => ClaudeCodeModels.Find(id),
+        AgentBackend.Antigravity => AgyModels.Find(id),
+        _ => Models.Find(id)
+    };
 
     private string EffectiveModel => string.IsNullOrWhiteSpace(Model) ? InheritedModel ?? "" : Model;
 
-    protected override void OnInitialized() => Models.Changed += OnModelsChanged;
+    protected override void OnInitialized()
+    {
+        Models.Changed += OnModelsChanged;
+        AgyModels.Changed += OnModelsChanged;
+    }
 
     private void OnModelsChanged() => _ = InvokeAsync(StateHasChanged);
 
-    private Task Refresh() => TokenVariable is null ? Task.CompletedTask : Models.RefreshAsync(TokenVariable, force: true);
+    private Task Refresh() => IsAntigravity
+        ? AgyModels.RefreshAsync(AntigravityCliPath, IsolateAntigravity, force: true)
+        : TokenVariable is null ? Task.CompletedTask : Models.RefreshAsync(TokenVariable, force: true);
 
-    private IReadOnlyList<string> EffortOptions() => Find(EffectiveModel) switch
+    private IReadOnlyList<string> EffortOptions() => IsAntigravity ? [] : Find(EffectiveModel) switch
     {
         { IsAuto: false } model => model.ReasoningEfforts,
         _ => IsClaude ? ClaudeEfforts : GenericEfforts
@@ -112,6 +136,13 @@
                    $", output ${claude.OutputCreditsPerMillion:#,0.##}. On a subscription this counts against your plan's limits.";
         }
 
+        if (IsAntigravity)
+        {
+            if (AgyModels.IsLoading && AgyModels.Models.Count == 0) return "Loading models from agy…";
+            if (AgyModels.Error is not null && AgyModels.Models.Count == 0) return $"Could not list Antigravity models: {AgyModels.Error}";
+            return $"Runs on your Google AI plan through agy ({AgyModels.Models.Count} models). agy reports tokens but no price.";
+        }
+
         if (TokenVariable is null) return "Set the Copilot token variable to load the models your account can use.";
         if (Models.IsLoading && Models.Models.Count == 0) return "Loading models…";
         if (Models.Error is not null && Models.Models.Count == 0) return $"Could not load models: {Models.Error}";
@@ -126,5 +157,9 @@
         return $"{Models.Models.Count} models available. Numbers after the name: input / output AI credits per 1M tokens.";
     }
 
-    public void Dispose() => Models.Changed -= OnModelsChanged;
+    public void Dispose()
+    {
+        Models.Changed -= OnModelsChanged;
+        AgyModels.Changed -= OnModelsChanged;
+    }
 }

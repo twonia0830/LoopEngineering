@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Text;
 using LoopEngineering.Core.Agents;
 using LoopEngineering.Core.Models;
 
@@ -76,80 +74,20 @@ public sealed class ClaudeCodeAgent(LoopConfig config) : ILoopAgent
         if (!string.IsNullOrWhiteSpace(effort) && !SupportedEfforts.Contains(effort))
             observer.OnLog("warn", $"Claude Code does not support reasoning effort '{effort}'; using the model default.");
 
-        var startInfo = new ProcessStartInfo(_cliPath)
-        {
-            WorkingDirectory = request.WorkingDirectory ?? config.PrimaryWorkingDirectory,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardInputEncoding = new UTF8Encoding(false),
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-        foreach (var arg in BuildArguments(config, request)) startInfo.ArgumentList.Add(arg);
-        startInfo.Environment.Clear();
-        foreach (var (key, value) in _environment) startInfo.Environment[key] = value;
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(request.Timeout);
-
-        using var process = new Process { StartInfo = startInfo };
-        var stderr = new Queue<string>();
-        process.ErrorDataReceived += (_, e) =>
-        {
-            if (e.Data is null) return;
-            lock (stderr)
-            {
-                stderr.Enqueue(e.Data);
-                if (stderr.Count > 40) stderr.Dequeue();
-            }
-        };
-
-        process.Start();
-        process.BeginErrorReadLine();
-
         var parser = new ClaudeStreamParser(observer);
-        try
-        {
-            // The prompt goes through stdin: no command-line length limit, no quoting issues.
-            await process.StandardInput.WriteAsync(request.Prompt.AsMemory(), timeout.Token);
-            process.StandardInput.Close();
-
-            while (await process.StandardOutput.ReadLineAsync(timeout.Token) is { } line)
-                parser.ProcessLine(line);
-
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            KillQuietly(process);
-            if (cancellationToken.IsCancellationRequested) throw;
-            throw new TimeoutException($"Claude Code turn exceeded {request.Timeout.TotalMinutes:0} minutes.");
-        }
+        var outcome = await CliTurnRunner.RunAsync(
+            _cliPath, BuildArguments(config, request), _environment,
+            request.WorkingDirectory ?? config.PrimaryWorkingDirectory,
+            request.Prompt, // the prompt goes through stdin: no command-line length limit, no quoting issues
+            parser.ProcessLine, request.Timeout, "Claude Code", cancellationToken);
 
         if (!parser.HasResult)
-        {
-            string tail;
-            lock (stderr) tail = string.Join(Environment.NewLine, stderr);
             throw new InvalidOperationException(
-                $"Claude Code exited with code {process.ExitCode} without a result." + (tail.Length > 0 ? $" {tail}" : ""));
-        }
+                $"Claude Code exited with code {outcome.ExitCode} without a result." + (outcome.StderrTail.Length > 0 ? $" {outcome.StderrTail}" : ""));
         if (parser.IsError)
             throw new InvalidOperationException($"Claude Code reported an error: {parser.ResultText}");
 
         return parser.ResultText;
-    }
-
-    private static void KillQuietly(Process process)
-    {
-        try
-        {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
-        }
-        catch (InvalidOperationException) { /* already gone */ }
-        catch (System.ComponentModel.Win32Exception) { /* access denied while exiting */ }
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

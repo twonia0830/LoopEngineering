@@ -24,6 +24,7 @@ builder.Services.AddSingleton<IAccountQuotaSource>(sp => sp.GetRequiredService<C
 builder.Services.AddSingleton<AccountQuotaService>();
 builder.Services.AddSingleton<IModelCatalogSource>(sp => sp.GetRequiredService<CopilotAccountSource>());
 builder.Services.AddSingleton<ModelCatalogService>();
+builder.Services.AddSingleton<LoopEngineering.Core.Antigravity.AntigravityModelCatalog>();
 builder.Services.AddHostedService<QuotaRefreshWorker>();
 builder.Services.AddSingleton(sp =>
     new CreditLedger(Path.Combine(sp.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "credit-ledger.json")));

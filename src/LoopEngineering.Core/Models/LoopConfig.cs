@@ -15,14 +15,18 @@ public enum AgentBackend
     Copilot,
 
     /// <summary>Claude Code CLI in headless mode (Claude subscription, Anthropic models).</summary>
-    ClaudeCode
+    ClaudeCode,
+
+    /// <summary>Google Antigravity CLI (`agy`) in headless mode (Google AI Pro/Ultra, Gemini and other models).</summary>
+    Antigravity
 }
 
 public enum AgentsMdBackendChoice
 {
     SameAsEvaluator,
     Copilot,
-    ClaudeCode
+    ClaudeCode,
+    Antigravity
 }
 
 public enum CriteriaSource
@@ -148,6 +152,15 @@ public sealed class LoopConfig
     /// <summary>Path to the `claude` executable. Empty = find it on PATH (or ~/.local/bin).</summary>
     public string ClaudeCliPath { get; set; } = "";
 
+    /// <summary>Path to the Antigravity `agy` executable. Empty = find it on PATH (or ~/.gemini/bin).</summary>
+    public string AntigravityCliPath { get; set; } = "";
+
+    /// <summary>
+    /// Run `agy` with an app-owned home folder so the personal ~/.gemini setup (GEMINI.md, plugins, MCP
+    /// servers, settings) stays out of the loop. The saved Google sign-in still works; it is not stored there.
+    /// </summary>
+    public bool IsolateAntigravity { get; set; } = true;
+
     public AgentBackend BackendFor(RoundPhase phase) => phase switch
     {
         RoundPhase.Evaluator => EvaluatorBackend,
@@ -155,6 +168,7 @@ public sealed class LoopConfig
         {
             AgentsMdBackendChoice.Copilot => AgentBackend.Copilot,
             AgentsMdBackendChoice.ClaudeCode => AgentBackend.ClaudeCode,
+            AgentsMdBackendChoice.Antigravity => AgentBackend.Antigravity,
             _ => EvaluatorBackend
         },
         _ => WorkerBackend
