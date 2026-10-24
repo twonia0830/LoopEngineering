@@ -66,7 +66,9 @@ public sealed class ProgressFile
         {
             RoundStatus.Failed => "FAILED",
             RoundStatus.Cancelled => "CANCELLED",
-            _ when eval?.CriteriaMet == true => "CRITERIA MET",
+            _ when round.GoalReached => "CRITERIA MET",
+            _ when round.TaskPassed => "TASK PASSED",
+            _ when eval?.CriteriaMet == true && round.TaskTitle is null => "CRITERIA MET",
             _ => "NOT MET"
         };
 
@@ -75,6 +77,8 @@ public sealed class ProgressFile
         sb.AppendLine($"- **Started:** {round.StartedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}");
         sb.AppendLine($"- **Duration:** {FormatDuration(round.Duration)}");
         sb.AppendLine($"- **Tool calls:** {round.ToolCalls}");
+        if (round.TaskTitle is not null) sb.AppendLine($"- **Task:** {round.TaskTitle} ({(round.TaskPassed ? "passed" : "not passed yet")})");
+        if (round.FinalCheck) sb.AppendLine($"- **Final check of the overall criteria:** {(round.GoalReached ? "met" : "not met yet")}");
         if (!round.Usage.IsEmpty) sb.AppendLine($"- **Tokens:** {round.Usage}");
         if (round.Usage.Models.Count > 0)
             sb.AppendLine($"- **Models used:** worker {PhaseLabel(round.WorkerUsage)}; evaluator {PhaseLabel(round.EvaluatorUsage)}");
@@ -123,6 +127,24 @@ public sealed class ProgressFile
         };
         var usage = total is { IsEmpty: false } ? $"\n\nTotal tokens: {total}" : "";
         Append($"### Result — {text}\n\nEnded {endedAt.LocalDateTime:yyyy-MM-dd HH:mm:ss}{usage}\n");
+    }
+
+    /// <summary>Records the approved plan at the start of a run.</summary>
+    public void AppendPlan(Planning.LoopPlan plan)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"### Plan ({plan.Tasks.Count} task{(plan.Tasks.Count == 1 ? "" : "s")}, approved)");
+        if (!string.IsNullOrWhiteSpace(plan.Summary)) { sb.AppendLine(); sb.AppendLine(plan.Summary.Trim()); }
+        sb.AppendLine();
+        for (var i = 0; i < plan.Tasks.Count; i++)
+        {
+            var t = plan.Tasks[i];
+            sb.AppendLine($"{i + 1}. **{t.Title}**");
+            foreach (var line in t.Criteria.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                sb.AppendLine($"   - {line.TrimStart('-', ' ')}");
+        }
+        sb.AppendLine();
+        Append(sb.ToString());
     }
 
     /// <summary>One-line note in the current run section (e.g. AGENTS.md created).</summary>

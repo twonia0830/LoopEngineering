@@ -29,6 +29,10 @@ builder.Services.AddSingleton(sp => new LoopEngineering.Core.Health.BackendHealt
     Path.Combine(sp.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "backend-verification.json"),
     sp.GetRequiredService<ModelCatalogService>(),
     sp.GetRequiredService<LoopEngineering.Core.Antigravity.AntigravityModelCatalog>()));
+builder.Services.AddSingleton(sp => new LoopEngineering.Core.Planning.PlanService(
+    Path.Combine(sp.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "current-plan.json"),
+    sp.GetRequiredService<ILoopAgentFactory>(),
+    sp.GetRequiredService<IGitHubIssueFetcher>()));
 builder.Services.AddHostedService<QuotaRefreshWorker>();
 builder.Services.AddSingleton(sp =>
     new CreditLedger(Path.Combine(sp.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "credit-ledger.json")));
@@ -47,6 +51,7 @@ runner.RoundCompleted += () => _ = quotaService.RefreshAsync(force: false);
 // Keep a monthly total of credits spent by this app; the SDK reports 0 consumed for credit-billed accounts.
 var ledger = app.Services.GetRequiredService<CreditLedger>();
 runner.RoundUsageRecorded += usage => ledger.Add(usage.AiCredits ?? 0);
+app.Services.GetRequiredService<LoopEngineering.Core.Planning.PlanService>().UsageRecorded += usage => ledger.Add(usage.AiCredits ?? 0);
 
 if (!app.Environment.IsDevelopment())
 {

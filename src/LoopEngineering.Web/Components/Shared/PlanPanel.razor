@@ -1,0 +1,181 @@
+@implements IDisposable
+@inject PlanService Plans
+
+<div class="plan-panel">
+    @if (RunPlan is { } running)
+    {
+        @* During a run: show progress through the approved plan. *@
+        <p class="muted">執行中的計畫（已核准）</p>
+        <ol class="plan-progress">
+            @foreach (var t in running.Tasks)
+            {
+                <li class="@(t.Status == PlanTaskStatus.Passed ? "done" : ReferenceEquals(t, running.CurrentTask) ? "current" : "")">
+                    <b>@t.Title</b>
+                    <span class="badge @(t.Status == PlanTaskStatus.Passed ? "ok" : ReferenceEquals(t, running.CurrentTask) ? "running" : "")">
+                        @(t.Status == PlanTaskStatus.Passed ? "通過" : ReferenceEquals(t, running.CurrentTask) ? "進行中" : "待處理")
+                    </span>
+                    @if (t.Attempts > 0) { <span class="muted">嘗試 @t.Attempts 次</span> }
+                </li>
+            }
+        </ol>
+        @if (running.AllTasksPassed) { <p class="muted">所有任務都已通過，接著用整體標準做最終檢查。</p> }
+    }
+    else if (Plans.IsPlanning)
+    {
+        <div class="activity"><span class="spinner"></span>Planner 正在檢查目標與驗收標準…</div>
+    }
+    else if (!Config.EnablePlanner)
+    {
+        <p class="muted">Planner 已關閉，按 Start 會直接開始執行。可以在左側「Planner」區塊開啟。</p>
+    }
+    else if (_draft is null)
+    {
+        @if (Plans.Error is { } error) { <div class="alert error">預檢失敗：@error</div> }
+        <p class="muted">還沒有計畫。按右上角「預檢」，Planner 會先檢查目標與驗收標準，必要時拆分任務，再交給你核准。</p>
+    }
+    else
+    {
+        @if (Plans.Error is { } error) { <div class="alert error">上次預檢失敗：@error</div> }
+        @if (!Plans.IsCurrentFor(Config))
+        {
+            <div class="alert warn-box">目標、驗收標準或工作資料夾在預檢後有變更，請重新預檢。</div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_draft.Summary))
+        {
+            <p>@_draft.Summary</p>
+        }
+        @if (Plans.LastUsage is { IsEmpty: false } usage)
+        {
+            <p class="muted small-text">預檢用量：@usage</p>
+        }
+
+        @if (_draft.Issues.Count > 0)
+        {
+            <h4>Planner 發現的問題</h4>
+            <ul class="plan-issues">
+                @foreach (var issue in _draft.Issues.OrderBy(i => i.Severity))
+                {
+                    <li class="issue-@issue.Severity.ToString().ToLowerInvariant()">
+                        <span class="badge @(issue.Severity switch { PlanIssueSeverity.Blocker => "fail", PlanIssueSeverity.Warning => "warn", _ => "" })">
+                            @(issue.Severity switch { PlanIssueSeverity.Blocker => "阻礙", PlanIssueSeverity.Warning => "警告", _ => "資訊" })
+                        </span>
+                        @issue.Message
+                        @if (!string.IsNullOrWhiteSpace(issue.Suggestion)) { <div class="muted">建議：@issue.Suggestion</div> }
+                    </li>
+                }
+            </ul>
+        }
+        else
+        {
+            <p class="ok-text">Planner 沒有發現問題。</p>
+        }
+
+        <h4>任務（@_draft.Tasks.Count）</h4>
+        <small class="muted">每輪處理一個任務；可以直接修改。只有一個任務時，流程跟沒有計畫一樣。</small>
+        @for (var i = 0; i < _draft.Tasks.Count; i++)
+        {
+            var index = i;
+            var task = _draft.Tasks[index];
+            <div class="plan-task">
+                <div class="row">
+                    <span class="task-no">@(index + 1)</span>
+                    <input value="@task.Title" @onchange="e => { task.Title = e.Value?.ToString() ?? string.Empty; Save(); }" placeholder="任務標題" />
+                    <button class="btn small" title="上移" disabled="@(index == 0)" @onclick="() => Move(index, -1)">↑</button>
+                    <button class="btn small" title="下移" disabled="@(index == _draft.Tasks.Count - 1)" @onclick="() => Move(index, 1)">↓</button>
+                    <button class="btn small" title="刪除" disabled="@(_draft.Tasks.Count == 1)" @onclick="() => Remove(index)">✕</button>
+                </div>
+                <textarea rows="2" placeholder="這個任務要做什麼" @onchange="e => { task.Goal = e.Value?.ToString() ?? string.Empty; Save(); }">@task.Goal</textarea>
+                <textarea rows="3" placeholder="驗收標準（每行一條，要能檢查）" @onchange="e => { task.Criteria = e.Value?.ToString() ?? string.Empty; Save(); }">@task.Criteria</textarea>
+            </div>
+        }
+        <button class="btn small" @onclick="Add">+ 新增任務</button>
+
+        @if (_draft.SuggestedChecks.Count > 0)
+        {
+            <h4>建議的檢查指令</h4>
+            <small class="muted">僅供參考，不會自動執行（之後的版本會加入可確認後執行的檢查關卡）。</small>
+            <ul class="plan-checks">
+                @foreach (var check in _draft.SuggestedChecks)
+                {
+                    <li><code>@check.Command</code> <span class="muted">— @check.Verifies</span></li>
+                }
+            </ul>
+        }
+
+        <div class="plan-actions">
+            <button class="btn primary" disabled="@(!Plans.IsCurrentFor(Config) || IsBlocked)" @onclick="ApproveAndStart">
+                @(_draft.HasBlockers ? "仍要核准並開始" : "核准並開始")
+            </button>
+            <button class="btn" disabled="@IsBlocked" @onclick="Replan">重新預檢</button>
+            <button class="btn" disabled="@IsBlocked" @onclick="Discard">捨棄計畫</button>
+        </div>
+        @if (_draft.HasBlockers)
+        {
+            <small class="err-text">有「阻礙」等級的問題，建議先修改目標或驗收標準再重新預檢。</small>
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public LoopConfig Config { get; set; } = default!;
+
+    /// <summary>The plan of the active run (from the runner snapshot); shown read-only.</summary>
+    [Parameter] public LoopPlan? RunPlan { get; set; }
+
+    /// <summary>True while a loop is running; disables plan actions.</summary>
+    [Parameter] public bool IsBlocked { get; set; }
+
+    [Parameter] public EventCallback OnApproveAndStart { get; set; }
+    [Parameter] public EventCallback OnReplan { get; set; }
+
+    private LoopPlan? _draft;
+
+    protected override void OnInitialized()
+    {
+        _draft = Plans.Plan;
+        Plans.Changed += OnPlansChanged;
+    }
+
+    private void OnPlansChanged() => _ = InvokeAsync(() =>
+    {
+        _draft = Plans.Plan;
+        StateHasChanged();
+    });
+
+    private void Save()
+    {
+        if (_draft is not null) Plans.Update(_draft);
+    }
+
+    private void Move(int index, int delta)
+    {
+        if (_draft is null) return;
+        var task = _draft.Tasks[index];
+        _draft.Tasks.RemoveAt(index);
+        _draft.Tasks.Insert(index + delta, task);
+        Save();
+    }
+
+    private void Remove(int index)
+    {
+        if (_draft is null || _draft.Tasks.Count <= 1) return;
+        _draft.Tasks.RemoveAt(index);
+        Save();
+    }
+
+    private void Add()
+    {
+        if (_draft is null) return;
+        _draft.Tasks.Add(new PlanTask { Title = "新任務" });
+        Save();
+    }
+
+    private Task ApproveAndStart() => OnApproveAndStart.InvokeAsync();
+
+    private Task Replan() => OnReplan.InvokeAsync();
+
+    private void Discard() => Plans.Discard();
+
+    public void Dispose() => Plans.Changed -= OnPlansChanged;
+}

@@ -60,7 +60,7 @@ public sealed class ClaudeCodeAgent(LoopConfig config) : ILoopAgent
             foreach (var dir in config.WorkingDirectories.Skip(1)) args.AddRange(["--add-dir", dir]);
 
         // Enforce "do not modify files" with tool restrictions instead of trusting the prompt alone.
-        if (request.Phase is RoundPhase.Evaluator or RoundPhase.Guide)
+        if (request.Phase is RoundPhase.Evaluator or RoundPhase.Guide or RoundPhase.Planner)
             args.AddRange(["--disallowed-tools", ReadOnlyDisallowedTools]);
 
         return args;

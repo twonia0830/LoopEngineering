@@ -125,7 +125,7 @@ public sealed class AntigravityTests
         Assert.Equal("gemini-3.8-flash-low", config.ModelFor(RoundPhase.Guide));
         Assert.True(config.UsesBackend(AgentBackend.Antigravity));
 
-        config.AgentsMdBackend = AgentsMdBackendChoice.Antigravity;
+        config.AgentsMdBackend = HelperBackendChoice.Antigravity;
         config.EvaluatorBackend = AgentBackend.ClaudeCode;
         Assert.Equal(AgentBackend.Antigravity, config.BackendFor(RoundPhase.Guide));
         Assert.Equal("", config.ModelFor(RoundPhase.Guide)); // evaluator's Claude model doesn't carry over

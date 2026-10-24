@@ -21,7 +21,7 @@ public enum AgentBackend
     Antigravity
 }
 
-public enum AgentsMdBackendChoice
+public enum HelperBackendChoice
 {
     SameAsEvaluator,
     Copilot,
@@ -141,7 +141,7 @@ public sealed class LoopConfig
     public AgentBackend EvaluatorBackend { get; set; } = AgentBackend.Copilot;
 
     /// <summary>Which agent runtime writes AGENTS.md.</summary>
-    public AgentsMdBackendChoice AgentsMdBackend { get; set; } = AgentsMdBackendChoice.SameAsEvaluator;
+    public HelperBackendChoice AgentsMdBackend { get; set; } = HelperBackendChoice.SameAsEvaluator;
 
     /// <summary>
     /// Name of the environment variable holding a Claude Code token (from `claude setup-token`). Read from this
@@ -161,19 +161,37 @@ public sealed class LoopConfig
     /// </summary>
     public bool IsolateAntigravity { get; set; } = true;
 
+    /// <summary>
+    /// Run a planner before the loop: it reviews the goal and criteria, flags vague or unverifiable criteria,
+    /// and splits a large goal into ordered tasks. The plan must be approved before the loop starts.
+    /// </summary>
+    public bool EnablePlanner { get; set; } = true;
+
+    /// <summary>Which runtime runs the planner.</summary>
+    public HelperBackendChoice PlannerBackend { get; set; } = HelperBackendChoice.SameAsEvaluator;
+
+    /// <summary>Planner model. Empty = same as the evaluator when on its backend, else the backend default.</summary>
+    public string PlannerModel { get; set; } = "";
+
+    public string PlannerReasoningEffort { get; set; } = "";
+
     public AgentBackend BackendFor(RoundPhase phase) => phase switch
     {
         RoundPhase.Evaluator => EvaluatorBackend,
-        RoundPhase.Guide => AgentsMdBackend switch
-        {
-            AgentsMdBackendChoice.Copilot => AgentBackend.Copilot,
-            AgentsMdBackendChoice.ClaudeCode => AgentBackend.ClaudeCode,
-            AgentsMdBackendChoice.Antigravity => AgentBackend.Antigravity,
-            _ => EvaluatorBackend
-        },
+        RoundPhase.Planner => Resolve(PlannerBackend),
+        RoundPhase.Guide => Resolve(AgentsMdBackend),
         _ => WorkerBackend
     };
 
+    private AgentBackend Resolve(HelperBackendChoice choice) => choice switch
+    {
+        HelperBackendChoice.Copilot => AgentBackend.Copilot,
+        HelperBackendChoice.ClaudeCode => AgentBackend.ClaudeCode,
+        HelperBackendChoice.Antigravity => AgentBackend.Antigravity,
+        _ => EvaluatorBackend
+    };
+
+    /// <summary>Backends the loop itself needs (the planner runs separately, before the loop).</summary>
     public bool UsesBackend(AgentBackend backend) =>
         WorkerBackend == backend || EvaluatorBackend == backend || (UseAgentsMd && BackendFor(RoundPhase.Guide) == backend);
 
@@ -183,6 +201,8 @@ public sealed class LoopConfig
     /// </summary>
     public string ModelFor(RoundPhase phase) => phase switch
     {
+        RoundPhase.Planner when !string.IsNullOrWhiteSpace(PlannerModel) => PlannerModel,
+        RoundPhase.Planner => BackendFor(RoundPhase.Planner) == BackendFor(RoundPhase.Evaluator) ? ModelFor(RoundPhase.Evaluator) : "",
         RoundPhase.Guide when !string.IsNullOrWhiteSpace(AgentsMdModel) => AgentsMdModel,
         RoundPhase.Guide => BackendFor(RoundPhase.Guide) == BackendFor(RoundPhase.Evaluator) ? ModelFor(RoundPhase.Evaluator) : "",
         RoundPhase.Evaluator when !string.IsNullOrWhiteSpace(EvaluatorModel) => EvaluatorModel,
@@ -192,6 +212,13 @@ public sealed class LoopConfig
 
     public string ReasoningEffortFor(RoundPhase phase)
     {
+        if (phase == RoundPhase.Planner)
+        {
+            if (!string.IsNullOrWhiteSpace(PlannerReasoningEffort)) return PlannerReasoningEffort;
+            return string.IsNullOrWhiteSpace(PlannerModel) && BackendFor(RoundPhase.Planner) == BackendFor(RoundPhase.Evaluator)
+                ? ReasoningEffortFor(RoundPhase.Evaluator)
+                : "";
+        }
         if (phase == RoundPhase.Guide)
         {
             if (!string.IsNullOrWhiteSpace(AgentsMdReasoningEffort)) return AgentsMdReasoningEffort;

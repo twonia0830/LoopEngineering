@@ -1,4 +1,5 @@
 using System.Text;
+using LoopEngineering.Core.Planning;
 using LoopEngineering.Core.Models;
 
 namespace LoopEngineering.Core.Loop;
@@ -9,8 +10,9 @@ public static class PromptBuilder
     public const int MaxProgressChars = 24_000;
 
     public static string BuildWorkerPrompt(LoopConfig config, string goal, string criteria, int round, string progressPath, string progressContent,
-        IReadOnlyList<RepoGuideContent>? guides = null)
+        IReadOnlyList<RepoGuideContent>? guides = null, LoopPlan? plan = null)
     {
+        var task = plan?.CurrentTask;
         var sb = new StringBuilder();
         sb.AppendLine($"You are working inside an automated improvement loop. This is round {round} of at most {config.MaxLoops} for the goal \"{config.GoalName}\".");
         sb.AppendLine("Each round starts with a fresh context: everything you know about earlier rounds comes from the progress history below and from the files in the working folders.");
@@ -22,8 +24,17 @@ public static class PromptBuilder
         AppendFolders(sb, config);
         AppendGuides(sb, guides);
         sb.AppendLine();
-        sb.AppendLine("## Result criteria (the round is judged against these)");
-        sb.AppendLine(criteria.Trim());
+        if (plan is not null && task is not null)
+        {
+            AppendPlan(sb, plan, task);
+            sb.AppendLine("## Overall result criteria (checked once every task has passed)");
+            sb.AppendLine(criteria.Trim());
+        }
+        else
+        {
+            sb.AppendLine("## Result criteria (the round is judged against these)");
+            sb.AppendLine(criteria.Trim());
+        }
         sb.AppendLine();
         sb.AppendLine("## Progress history");
         sb.AppendLine($"Full file: `{progressPath}`");
@@ -32,7 +43,9 @@ public static class PromptBuilder
         sb.AppendLine("```");
         sb.AppendLine();
         sb.AppendLine("## Instructions for this round");
-        sb.AppendLine("- Inspect the current state, decide the most valuable remaining work toward the criteria, and do it now.");
+        sb.AppendLine(task is not null && plan!.Tasks.Count > 1
+            ? "- Work only on the current task above; later tasks get their own rounds."
+            : "- Inspect the current state, decide the most valuable remaining work toward the criteria, and do it now.");
         sb.AppendLine("- Address the evaluator's \"next steps\" from the previous round first, if any.");
         sb.AppendLine("- Use available skills and sub-agents when they fit the task.");
         sb.AppendLine("- Do not edit the progress file; the loop controller maintains it.");
@@ -49,7 +62,7 @@ public static class PromptBuilder
     }
 
     public static string BuildEvaluatorPrompt(LoopConfig config, string goal, string criteria, int round, string workerOutput,
-        IReadOnlyList<RepoGuideContent>? guides = null)
+        IReadOnlyList<RepoGuideContent>? guides = null, PlanTask? task = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"You are the strict evaluator of round {round} of an automated loop working toward the goal \"{config.GoalName}\".");
@@ -63,8 +76,19 @@ public static class PromptBuilder
         AppendFolders(sb, config);
         AppendGuides(sb, guides);
         sb.AppendLine();
-        sb.AppendLine("## Result criteria");
-        sb.AppendLine(criteria.Trim());
+        if (task is not null)
+        {
+            sb.AppendLine($"## Task under review: {task.Title}");
+            if (!string.IsNullOrWhiteSpace(task.Goal)) sb.AppendLine(task.Goal.Trim());
+            sb.AppendLine();
+            sb.AppendLine("## Result criteria for this task (judge only these)");
+            sb.AppendLine(task.Criteria.Trim());
+        }
+        else
+        {
+            sb.AppendLine("## Result criteria");
+            sb.AppendLine(criteria.Trim());
+        }
         sb.AppendLine();
         sb.AppendLine("## Worker report for this round");
         sb.AppendLine(Tail(workerOutput, 12_000));
@@ -74,6 +98,63 @@ public static class PromptBuilder
         sb.AppendLine("{\"criteriaMet\": true|false, \"score\": 0-100, \"reasoning\": \"why, citing evidence\", \"nextSteps\": \"the most important work still missing (empty if met)\"}");
         sb.AppendLine("Set criteriaMet to true only if every criterion is fully satisfied.");
         return sb.ToString();
+    }
+
+    public static string BuildPlannerPrompt(LoopConfig config, string goal, string criteria, IReadOnlyList<RepoGuideContent>? guides = null)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"You are the planner for an automated loop that will work toward the goal \"{config.GoalName}\" in up to {config.MaxLoops} rounds.");
+        sb.AppendLine("Each round, a worker agent with a fresh context makes changes and an independent evaluator judges them against acceptance criteria.");
+        sb.AppendLine("Before the loop starts, review the goal and the criteria so the loop does not waste rounds. Inspect the working folders as needed (read files, list folders).");
+        sb.AppendLine("Do NOT modify, create or delete any files.");
+        sb.AppendLine();
+        sb.AppendLine("## Goal");
+        sb.AppendLine(goal.Trim());
+        sb.AppendLine();
+        sb.AppendLine("## Working folders");
+        AppendFolders(sb, config);
+        AppendGuides(sb, guides);
+        sb.AppendLine();
+        sb.AppendLine("## Acceptance criteria as written");
+        sb.AppendLine(criteria.Trim());
+        sb.AppendLine();
+        sb.AppendLine("## What to do");
+        sb.AppendLine("1. Find problems: criteria that are vague or subjective (an evaluator cannot verify them), goals that conflict with the code you see,");
+        sb.AppendLine("   missing information the worker would need, and anything that cannot be done in the working folders.");
+        sb.AppendLine("   Use \"blocker\" only when the loop would likely fail or waste rounds until it is fixed.");
+        sb.AppendLine("2. Decide the task list. If the goal fits comfortably in one round, return exactly ONE task that restates the whole goal with sharpened criteria.");
+        sb.AppendLine($"   If it is too big for one round, split it into ordered tasks (at most {Math.Max(1, config.MaxLoops)}), each small enough for one round,");
+        sb.AppendLine("   each with its own concrete, checkable criteria. Together the tasks must satisfy all the acceptance criteria.");
+        sb.AppendLine("3. Suggest commands that would check criteria deterministically (build, tests, a script), if any apply. They are shown to the user, not run.");
+        sb.AppendLine();
+        sb.AppendLine("## Response format");
+        sb.AppendLine("Reply with ONLY a JSON object, no other text:");
+        sb.AppendLine("{\"summary\": \"one or two sentences on the plan\",");
+        sb.AppendLine(" \"issues\": [{\"severity\": \"blocker|warning|info\", \"message\": \"what is wrong\", \"suggestion\": \"how to fix it\"}],");
+        sb.AppendLine(" \"tasks\": [{\"title\": \"short title\", \"goal\": \"what to do in this task\", \"criteria\": \"checkable criteria, one per line\"}],");
+        sb.AppendLine(" \"suggestedChecks\": [{\"command\": \"exact command\", \"verifies\": \"which criterion it checks\"}]}");
+        return sb.ToString();
+    }
+
+    private static void AppendPlan(StringBuilder sb, LoopPlan plan, PlanTask current)
+    {
+        if (plan.Tasks.Count > 1)
+        {
+            sb.AppendLine("## Plan");
+            for (var i = 0; i < plan.Tasks.Count; i++)
+            {
+                var t = plan.Tasks[i];
+                var mark = t.Status == PlanTaskStatus.Passed ? "done" : ReferenceEquals(t, current) ? "CURRENT" : "later";
+                sb.AppendLine($"{i + 1}. [{mark}] {t.Title}");
+            }
+            sb.AppendLine();
+        }
+        sb.AppendLine($"## Current task: {current.Title}");
+        if (!string.IsNullOrWhiteSpace(current.Goal)) sb.AppendLine(current.Goal.Trim());
+        sb.AppendLine();
+        sb.AppendLine("## Task criteria (this round is judged against these)");
+        sb.AppendLine(current.Criteria.Trim());
+        sb.AppendLine();
     }
 
     private static void AppendFolders(StringBuilder sb, LoopConfig config)

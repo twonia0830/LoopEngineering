@@ -154,6 +154,26 @@ total, the log and the progress file. `AGENTS.md` is an ordinary repo file: revi
 your team, and tools such as Copilot in VS Code, benefit too. A failed guide step is logged and the
 run continues without it.
 
+## Planner (pre-flight check)
+
+With **Planner** on (default), the first press of the top-right button runs a one-off planner
+instead of the loop. It reads the goal, the criteria and the working folders (read-only) and returns:
+
+- **Issues** — blocker / warning / info, e.g. criteria an evaluator cannot verify, goals that conflict
+  with the code, missing information.
+- **Tasks** — one task for a goal that fits in a round, or an ordered list of small tasks, each with
+  checkable criteria.
+- **Suggested checks** — commands that could verify criteria (build, tests, scripts). Shown only;
+  nothing is run.
+
+The plan appears in the **Plan** tab, where you can edit, reorder, add or remove tasks, re-plan, or
+discard it. **核准並開始** starts the loop. Each round then works on the next unfinished task and the
+evaluator judges only that task's criteria; when every task of a multi-task plan has passed, a final
+evaluator turn checks the original overall criteria (if it fails, later rounds work on the gaps). A
+plan is tied to the goal, criteria and folders it was made for (changing them asks for a new plan),
+editing it clears the approval, and it is kept in `App_Data/current-plan.json`. The planner has its own
+backend and model setting; a strong model is worth it since it runs once.
+
 ## How a round works
 
 1. Worker prompt = goal (text, file or fetched issues) + working folders + result criteria + the progress file so far (+ extra instructions).

@@ -8,6 +8,7 @@
 @inject ModelCatalogService Models
 @inject AntigravityModelCatalog AgyModels
 @inject BackendHealthService Health
+@inject PlanService Plans
 
 <PageTitle>Loop Engineering</PageTitle>
 
@@ -25,7 +26,7 @@
     }
     else
     {
-        <button class="btn primary" @onclick="Start">▶ Start</button>
+        <button class="btn primary" @onclick="Start" disabled="@Plans.IsPlanning">@(Plans.IsPlanning ? "預檢中…" : !NeedsPlan ? "▶ Start" : Plans.IsCurrentFor(_config) ? "▶ 審核計畫" : "▶ 預檢")</button>
     }
 </header>
 
@@ -191,6 +192,35 @@
             </div>
 
             <div class="model-group">
+                <h3>Planner</h3>
+                <label class="inline">
+                    <input type="checkbox" @bind="_config.EnablePlanner" />
+                    開始前先預檢目標與驗收標準（必要時拆分任務），核准後才執行
+                </label>
+                @if (_config.EnablePlanner)
+                {
+                    <label>Runs on
+                        <select @bind="_config.PlannerBackend" @bind:after="OnBackendsChanged">
+                            <option value="@HelperBackendChoice.SameAsEvaluator">Same as evaluator</option>
+                            <option value="@HelperBackendChoice.Copilot" disabled="@(!Health.IsUsable(AgentBackend.Copilot))">GitHub Copilot@(BackendSuffix(AgentBackend.Copilot))</option>
+                            <option value="@HelperBackendChoice.ClaudeCode" disabled="@(!Health.IsUsable(AgentBackend.ClaudeCode))">Claude Code@(BackendSuffix(AgentBackend.ClaudeCode))</option>
+                            <option value="@HelperBackendChoice.Antigravity" disabled="@(!Health.IsUsable(AgentBackend.Antigravity))">Antigravity (Google)@(BackendSuffix(AgentBackend.Antigravity))</option>
+                        </select>
+                    </label>
+                    var plannerBackend = _config.BackendFor(RoundPhase.Planner);
+                    var plannerInherits = plannerBackend == _config.EvaluatorBackend;
+                    <ModelPicker Label="Model" @bind-Model="_config.PlannerModel" @bind-Effort="_config.PlannerReasoningEffort"
+                                 Backend="plannerBackend"
+                                 EmptyLabel="@(plannerInherits ? "Same as evaluator" : DefaultLabel(plannerBackend))"
+                                 EffortEmptyLabel="@(plannerInherits && string.IsNullOrWhiteSpace(_config.PlannerModel) ? "same as evaluator" : "default")"
+                                 InheritedModel="@(plannerInherits ? _config.ModelFor(RoundPhase.Evaluator) : null)" ShowRefresh="false"
+                                 TokenVariable="@(_tokenFound ? _config.TokenEnvironmentVariable : null)"
+                                 AntigravityCliPath="@_config.AntigravityCliPath" IsolateAntigravity="_config.IsolateAntigravity" />
+                    <small class="group-note">Planner 只跑一次，判斷品質影響整個 loop，建議選比較強的模型。</small>
+                }
+            </div>
+
+            <div class="model-group">
                 <h3>Repo guide (AGENTS.md)</h3>
                 <label class="inline">
                     <input type="checkbox" @bind="_config.UseAgentsMd" />
@@ -219,10 +249,10 @@
                     </label>
                     <label>Runs on
                         <select @bind="_config.AgentsMdBackend" @bind:after="OnBackendsChanged">
-                            <option value="@AgentsMdBackendChoice.SameAsEvaluator">Same as evaluator</option>
-                            <option value="@AgentsMdBackendChoice.Copilot" disabled="@(!Health.IsUsable(AgentBackend.Copilot))">GitHub Copilot@(BackendSuffix(AgentBackend.Copilot))</option>
-                            <option value="@AgentsMdBackendChoice.ClaudeCode" disabled="@(!Health.IsUsable(AgentBackend.ClaudeCode))">Claude Code@(BackendSuffix(AgentBackend.ClaudeCode))</option>
-                            <option value="@AgentsMdBackendChoice.Antigravity" disabled="@(!Health.IsUsable(AgentBackend.Antigravity))">Antigravity (Google)@(BackendSuffix(AgentBackend.Antigravity))</option>
+                            <option value="@HelperBackendChoice.SameAsEvaluator">Same as evaluator</option>
+                            <option value="@HelperBackendChoice.Copilot" disabled="@(!Health.IsUsable(AgentBackend.Copilot))">GitHub Copilot@(BackendSuffix(AgentBackend.Copilot))</option>
+                            <option value="@HelperBackendChoice.ClaudeCode" disabled="@(!Health.IsUsable(AgentBackend.ClaudeCode))">Claude Code@(BackendSuffix(AgentBackend.ClaudeCode))</option>
+                            <option value="@HelperBackendChoice.Antigravity" disabled="@(!Health.IsUsable(AgentBackend.Antigravity))">Antigravity (Google)@(BackendSuffix(AgentBackend.Antigravity))</option>
                         </select>
                     </label>
                     var guideBackend = _config.BackendFor(RoundPhase.Guide);
@@ -381,7 +411,7 @@
         </div>
 
         <nav class="tabs">
-            @foreach (var tab in new[] { "Live", "Rounds", "Progress file", "Log" })
+            @foreach (var tab in new[] { "Plan", "Live", "Rounds", "Progress file", "Log" })
             {
                 <button class="@(_tab == tab ? "active" : "")" @onclick="() => SelectTab(tab)">@tab
                     @if (tab == "Rounds" && _snap.Rounds.Count > 0) { <span class="count">@_snap.Rounds.Count</span> }
@@ -420,6 +450,11 @@
                         }
                     </div>
                 }
+                break;
+
+            case "Plan":
+                <PlanPanel Config="_config" RunPlan="@(_snap.IsActive ? _snap.Plan : null)" IsBlocked="_snap.IsActive"
+                           OnApproveAndStart="ApproveAndStart" OnReplan="Replan" />
                 break;
 
             case "Progress file":
@@ -480,6 +515,7 @@
         AgyModels.Changed += OnModelsChanged;
         OnAntigravitySettingsChanged();
         Health.Changed += OnHealthChanged;
+        Plans.Changed += OnPlansChanged;
         // Free setup checks in the background so the selectors know which backends can be picked.
         _ = Health.CheckAllAsync(_config);
         Quota.TokenVariable = _config.TokenEnvironmentVariable;
@@ -535,9 +571,10 @@
             if (!_claudeTokenFound) _errors.Add($"Environment variable '{_config.ClaudeTokenEnvironmentVariable}' is not set (Claude token from `claude setup-token`).");
             if (_claudeCliError is not null) _errors.Add(_claudeCliError);
         }
-        foreach (var (role, phase) in new[] { ("Worker", RoundPhase.Worker), ("Evaluator", RoundPhase.Evaluator), ("AGENTS.md", RoundPhase.Guide) })
+        foreach (var (role, phase) in new[] { ("Worker", RoundPhase.Worker), ("Evaluator", RoundPhase.Evaluator), ("AGENTS.md", RoundPhase.Guide), ("Planner", RoundPhase.Planner) })
         {
             if (phase == RoundPhase.Guide && !_config.UseAgentsMd) continue;
+            if (phase == RoundPhase.Planner && !_config.EnablePlanner) continue;
             var backend = _config.BackendFor(phase);
             if (!Health.IsUsable(backend))
                 _errors.Add($"{role} 使用 {ModelCheckDialog.Name(backend)}，但它尚未設置或驗證。請先按右上角「模型檢查」完成驗證，或改選其他後端。");
@@ -552,7 +589,8 @@
                  {
                      ("Worker", _config.Model, RoundPhase.Worker),
                      ("Evaluator", _config.EvaluatorModel, RoundPhase.Evaluator),
-                     ("AGENTS.md", _config.UseAgentsMd ? _config.AgentsMdModel : "", RoundPhase.Guide)
+                     ("AGENTS.md", _config.UseAgentsMd ? _config.AgentsMdModel : "", RoundPhase.Guide),
+                     ("Planner", _config.EnablePlanner ? _config.PlannerModel : "", RoundPhase.Planner)
                  })
         {
             if (string.IsNullOrWhiteSpace(id)) continue;
@@ -574,11 +612,20 @@
         }
         if (_errors.Count > 0) return;
 
+        // With the planner on, a run needs an approved plan for exactly this goal and criteria.
+        if (NeedsPlan)
+        {
+            Store.Save(_config);
+            _tab = "Plan";
+            if (!Plans.IsCurrentFor(_config)) _ = Plans.PlanAsync(_config);
+            return;
+        }
+
         try
         {
             Store.Save(_config);
             Quota.TokenVariable = _config.TokenEnvironmentVariable;
-            Runner.Start(_config); // the runner keeps its own copy of the config
+            Runner.Start(_config, _config.EnablePlanner ? Plans.Plan : null); // the runner keeps its own copies
 
             // Regenerating is a one-off: don't let it rewrite (and lose learnings from) AGENTS.md on every later run.
             if (_config.RegenerateAgentsMd)
@@ -595,6 +642,24 @@
             _errors = [ex.Message];
         }
         _snap = Runner.GetSnapshot();
+    }
+
+    // ---------- planner ----------
+
+    private bool NeedsPlan => _config.EnablePlanner && !Plans.IsApprovedFor(_config);
+
+    private void OnPlansChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void ApproveAndStart()
+    {
+        Plans.Approve();
+        Start();
+    }
+
+    private void Replan()
+    {
+        Store.Save(_config);
+        _ = Plans.PlanAsync(_config);
     }
 
     // ---------- model check ----------
@@ -639,6 +704,7 @@
         if (!Fits(_config.Model, _config.WorkerBackend)) { _config.Model = ""; _config.ReasoningEffort = ""; }
         if (!Fits(_config.EvaluatorModel, _config.EvaluatorBackend)) { _config.EvaluatorModel = ""; _config.EvaluatorReasoningEffort = ""; }
         if (!Fits(_config.AgentsMdModel, _config.BackendFor(RoundPhase.Guide))) { _config.AgentsMdModel = ""; _config.AgentsMdReasoningEffort = ""; }
+        if (!Fits(_config.PlannerModel, _config.BackendFor(RoundPhase.Planner))) { _config.PlannerModel = ""; _config.PlannerReasoningEffort = ""; }
         RefreshClaudeStatus();
         OnAntigravitySettingsChanged();
     }
@@ -871,6 +937,7 @@
         Models.Changed -= OnModelsChanged;
         AgyModels.Changed -= OnModelsChanged;
         Health.Changed -= OnHealthChanged;
+        Plans.Changed -= OnPlansChanged;
         _refreshTimer?.Dispose();
     }
 }

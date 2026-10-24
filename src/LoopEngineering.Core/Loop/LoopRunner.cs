@@ -1,6 +1,7 @@
 using System.Text;
 using LoopEngineering.Core.Agents;
 using LoopEngineering.Core.Issues;
+using LoopEngineering.Core.Planning;
 using LoopEngineering.Core.Models;
 
 namespace LoopEngineering.Core.Loop;
@@ -36,6 +37,9 @@ public sealed class LoopRunner
     /// <summary>Usage of the AGENTS.md steps, which run outside the rounds.</summary>
     private readonly TokenUsage _guideUsage = new();
 
+    /// <summary>The approved plan this run follows (null = one goal judged as a whole).</summary>
+    private LoopPlan? _plan;
+
     public LoopRunner(ILoopAgentFactory agentFactory, IGitHubIssueFetcher? issueFetcher = null)
     {
         _agentFactory = agentFactory;
@@ -68,6 +72,7 @@ public sealed class LoopRunner
                 LiveOutput = _liveOutput.ToString(),
                 CurrentActivity = _activity,
                 Rounds = _rounds.Select(r => r.Clone()).ToList(),
+                Plan = _plan?.Clone(),
                 ActiveSubagents = _rounds.LastOrDefault()?.Subagents.Where(s => s.IsRunning).Select(s => s.Clone()).ToList() ?? [],
                 Log = _log.ToList(),
                 TotalUsage = TotalUsageLocked()
@@ -76,7 +81,7 @@ public sealed class LoopRunner
     }
 
     /// <summary>Starts a run in the background. Throws if one is already active or the config is invalid.</summary>
-    public void Start(LoopConfig config)
+    public void Start(LoopConfig config, LoopPlan? plan = null)
     {
         var errors = config.Validate();
         if (errors.Count > 0) throw new ArgumentException(string.Join(Environment.NewLine, errors));
@@ -87,6 +92,7 @@ public sealed class LoopRunner
                 throw new InvalidOperationException("A loop is already running.");
 
             _config = config.Clone();
+            _plan = plan is { Tasks.Count: > 0 } ? plan.Clone() : null;
             _status = RunStatus.Running;
             _phase = RoundPhase.None;
             _currentRound = 0;
@@ -135,6 +141,9 @@ public sealed class LoopRunner
             // Resolve up front so a bad link or unreadable issue fails the run before any credits are spent.
             var goalText = await goal.ResolveAsync(ct);
             progress.WriteRunHeader(config, goalText, goal.SourceDescription, ReadCriteria(config), _startedAt ?? DateTimeOffset.Now);
+            LoopPlan? planAtStart;
+            lock (_gate) planAtStart = _plan?.Clone();
+            if (planAtStart is not null) progress.AppendPlan(planAtStart);
             AddLog("info", $"Progress file: {progress.Path}");
 
             await using var agent = _agentFactory.Create(config);
@@ -165,7 +174,7 @@ public sealed class LoopRunner
                 }
 
                 consecutiveFailures = 0;
-                if (result.Evaluation?.CriteriaMet == true)
+                if (result.GoalReached)
                 {
                     finalStatus = RunStatus.CriteriaMet;
                     break;
@@ -229,25 +238,71 @@ public sealed class LoopRunner
 
             SetPhase(RoundPhase.Worker, "Worker is running…");
             var guides = ReadGuides(config);
-            var workerPrompt = PromptBuilder.BuildWorkerPrompt(config, goalText, criteria, number, progress.Path, progress.Read(), guides);
+            LoopPlan? plan;
+            lock (_gate) plan = _plan?.Clone();
+            var task = plan?.CurrentTask;
+            var taskIndex = task is null ? -1 : plan!.Tasks.IndexOf(task);
+            if (task is not null)
+            {
+                lock (_gate) result.TaskTitle = task.Title;
+                AddLog("info", $"Round {number}: task {taskIndex + 1}/{plan!.Tasks.Count}, {task.Title}.");
+            }
+            var workerPrompt = PromptBuilder.BuildWorkerPrompt(config, goalText, criteria, number, progress.Path, progress.Read(), guides, plan);
             var workerOutput = await agent.RunTurnAsync(
                 new AgentTurnRequest(RoundPhase.Worker, workerPrompt, timeout), new Observer(this, result, RoundPhase.Worker), ct);
             lock (_gate) result.WorkerOutput = workerOutput;
 
             SetPhase(RoundPhase.Evaluator, "Evaluator is checking the criteria…");
             AppendLive("\n\n---- evaluator ----\n\n");
-            var evalPrompt = PromptBuilder.BuildEvaluatorPrompt(config, goalText, criteria, number, workerOutput, guides);
+            var evalPrompt = PromptBuilder.BuildEvaluatorPrompt(config, goalText, criteria, number, workerOutput, guides, task);
             var evalOutput = await agent.RunTurnAsync(
                 new AgentTurnRequest(RoundPhase.Evaluator, evalPrompt, timeout), new Observer(this, result, RoundPhase.Evaluator), ct);
             var evaluation = EvaluationParser.Parse(evalOutput);
+            var goalReached = evaluation.CriteriaMet;
+
+            if (task is not null)
+            {
+                bool allPassed, multiTask;
+                lock (_gate)
+                {
+                    var live = _plan!.Tasks[taskIndex];
+                    live.Attempts++;
+                    if (evaluation.CriteriaMet) live.Status = PlanTaskStatus.Passed;
+                    result.TaskPassed = evaluation.CriteriaMet;
+                    allPassed = _plan.AllTasksPassed;
+                    multiTask = _plan.Tasks.Count > 1;
+                }
+                AddLog(evaluation.CriteriaMet ? "success" : "info",
+                    $"Round {number}: task \"{task.Title}\" {(evaluation.CriteriaMet ? "passed" : "not passed yet")}{(evaluation.Score is int ts ? $" (score {ts})" : "")}.");
+
+                goalReached = evaluation.CriteriaMet && allPassed;
+                if (goalReached && multiTask)
+                {
+                    // Every task passed: confirm the original, overall criteria before declaring the goal reached.
+                    SetPhase(RoundPhase.Evaluator, "Final check against the overall criteria…");
+                    AppendLive("\n\n---- final check ----\n\n");
+                    var finalPrompt = PromptBuilder.BuildEvaluatorPrompt(config, goalText, criteria, number, workerOutput, guides);
+                    var finalOutput = await agent.RunTurnAsync(
+                        new AgentTurnRequest(RoundPhase.Evaluator, finalPrompt, timeout), new Observer(this, result, RoundPhase.Evaluator), ct);
+                    evaluation = EvaluationParser.Parse(finalOutput);
+                    goalReached = evaluation.CriteriaMet;
+                    lock (_gate) result.FinalCheck = true;
+                    AddLog(goalReached ? "success" : "info",
+                        $"Final check: {(goalReached ? "overall criteria met" : "overall criteria not met yet; next rounds work on the gaps")}.");
+                }
+            }
+            else
+            {
+                AddLog(evaluation.CriteriaMet ? "success" : "info",
+                    $"Round {number}: {(evaluation.CriteriaMet ? "criteria met" : "criteria not met")}{(evaluation.Score is int s ? $" (score {s})" : "")}.");
+            }
 
             lock (_gate)
             {
                 result.Evaluation = evaluation;
+                result.GoalReached = goalReached;
                 result.Status = RoundStatus.Completed;
             }
-            AddLog(evaluation.CriteriaMet ? "success" : "info",
-                $"Round {number}: {(evaluation.CriteriaMet ? "criteria met" : "criteria not met")}{(evaluation.Score is int s ? $" (score {s})" : "")}.");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

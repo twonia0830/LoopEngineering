@@ -135,11 +135,11 @@ public sealed class ClaudeCodeTests
 
         config.EvaluatorBackend = AgentBackend.ClaudeCode;
         config.EvaluatorModel = "claude-haiku-5-5";
-        config.AgentsMdBackend = AgentsMdBackendChoice.SameAsEvaluator;
+        config.AgentsMdBackend = HelperBackendChoice.SameAsEvaluator;
         Assert.Equal(AgentBackend.ClaudeCode, config.BackendFor(RoundPhase.Guide));
         Assert.Equal("claude-haiku-5-5", config.ModelFor(RoundPhase.Guide));
 
-        config.AgentsMdBackend = AgentsMdBackendChoice.Copilot;
+        config.AgentsMdBackend = HelperBackendChoice.Copilot;
         Assert.Equal("", config.ModelFor(RoundPhase.Guide));
     }
 

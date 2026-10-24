@@ -331,3 +331,21 @@ details > summary { cursor: pointer; font-weight: 600; margin-bottom: 10px; }
 .cmd-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
 .cmd-row code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; }
 .topbar .btn.check-btn { padding: 6px 12px; }
+
+/* ---------- plan panel ---------- */
+.plan-panel { display: flex; flex-direction: column; gap: 8px; }
+.plan-panel h4 { margin: 10px 0 2px; }
+.plan-issues, .plan-checks { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.plan-issues li { padding: 6px 8px; border-radius: 6px; background: var(--bg); }
+.plan-issues li.issue-blocker { border-left: 3px solid var(--fail); border-radius: 0; }
+.plan-issues li.issue-warning { border-left: 3px solid var(--warn); border-radius: 0; }
+.plan-task { border: 1px solid var(--border); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.plan-task .row { align-items: center; }
+.plan-task .row input { flex: 1; }
+.task-no { flex: 0 0 auto !important; font-weight: 600; color: var(--muted); min-width: 18px; }
+.plan-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.plan-progress { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.plan-progress li.done b { color: var(--ok); }
+.plan-progress li.current b { color: var(--run); }
+.warn-box { background: var(--warn-bg); color: var(--warn); }
+.small-text { font-size: 12px; }

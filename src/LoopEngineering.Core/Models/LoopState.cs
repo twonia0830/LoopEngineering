@@ -18,7 +18,10 @@ public enum RoundPhase
     Evaluator,
 
     /// <summary>Creating or updating AGENTS.md (outside the rounds).</summary>
-    Guide
+    Guide,
+
+    /// <summary>Reviewing the goal and criteria and drafting the task plan, before the loop starts.</summary>
+    Planner
 }
 
 public enum RoundStatus
@@ -71,6 +74,16 @@ public sealed class RoundResult
     public TokenUsage EvaluatorUsage { get; set; } = new();
     public string? Error { get; set; }
 
+    /// <summary>Plan task this round worked on (null without a plan).</summary>
+    public string? TaskTitle { get; set; }
+    public bool TaskPassed { get; set; }
+
+    /// <summary>True when this round ran the final check of the overall criteria after the last task passed.</summary>
+    public bool FinalCheck { get; set; }
+
+    /// <summary>The whole goal is reached (overall criteria met), so the run ends.</summary>
+    public bool GoalReached { get; set; }
+
     public TimeSpan? Duration => EndedAt - StartedAt;
 
     public RoundResult Clone()
@@ -103,6 +116,7 @@ public sealed class LoopSnapshot
     public IReadOnlyList<SubagentRecord> ActiveSubagents { get; init; } = [];
     public IReadOnlyList<LogEntry> Log { get; init; } = [];
     public TokenUsage TotalUsage { get; init; } = new();
+    public Planning.LoopPlan? Plan { get; init; }
 
     public bool IsActive => Status is RunStatus.Running or RunStatus.Stopping;
 }
