@@ -1,0 +1,169 @@
+@implements IDisposable
+@inject BackendHealthService Health
+@inject IJSRuntime JS
+
+@if (Visible)
+{
+    <div class="modal-backdrop" @onclick="Close">
+        <div class="modal check-modal" @onclick:stopPropagation="true" role="dialog" aria-label="模型檢查">
+            <div class="modal-head">
+                <h3>模型檢查</h3>
+                <button class="btn icon" @onclick="Close" aria-label="Close">✕</button>
+            </div>
+
+            <div class="check-legend muted">
+                設置：token、CLI、登入是否就緒（免費檢查）。驗證：用最便宜的模型跑一個最小 prompt，會花一點點額度。
+            </div>
+
+            @foreach (var status in Health.Statuses)
+            {
+                var backend = status.Backend;
+                <div class="check-row">
+                    <span class="check-name">@Name(backend)</span>
+
+                    <button class="pill @(status.IsConfigured ? "green" : "blue")" @onclick="() => Toggle(backend)"
+                            title="@(status.IsConfigured ? "查看設定細節" : "查看設定步驟")">
+                        @if (status.IsChecking) { <span class="spinner"></span> }
+                        @(status.IsConfigured ? "已設置" : "未設置")
+                    </button>
+                    <span class="check-sep">:</span>
+                    <button class="pill @(status.IsVerified ? "green" : status.IsConfigured ? "blue" : "gray")"
+                            disabled="@(!status.IsConfigured || status.IsVerifying || status.IsChecking)"
+                            @onclick="() => Verify(backend)"
+                            title="@(status.IsVerified ? "重新驗證" : status.IsConfigured ? "跑最小 prompt 驗證" : "請先完成設置")">
+                        @if (status.IsVerifying) { <span class="spinner"></span> }
+                        @(status.IsVerifying ? "驗證中…" : status.IsVerified ? "已驗證" : "未驗證")
+                    </button>
+                </div>
+
+                @if (status.LastError is { } error)
+                {
+                    <div class="check-detail err-text">驗證失敗：@error</div>
+                }
+                @if (status.IsVerified && status.VerifiedAt is { } at)
+                {
+                    <div class="check-detail muted">@at.LocalDateTime.ToString("yyyy-MM-dd HH:mm") 以 @(status.VerifiedModel ?? "預設模型") 驗證通過</div>
+                }
+
+                @if (_expanded.Contains(backend))
+                {
+                    <div class="check-panel">
+                        <div class="muted">@status.SetupDetail</div>
+                        @if (!status.IsConfigured)
+                        {
+                            <ol>
+                                @foreach (var step in Steps(backend))
+                                {
+                                    <li>
+                                        @step.Text
+                                        @if (step.Command is { } command)
+                                        {
+                                            <div class="cmd-row">
+                                                <code>@command</code>
+                                                <button class="btn small" @onclick="() => Copy(command)">複製</button>
+                                            </div>
+                                        }
+                                    </li>
+                                }
+                            </ol>
+                        }
+                        <button class="btn small" @onclick="() => Recheck(backend)" disabled="@status.IsChecking">
+                            @(status.IsChecking ? "檢查中…" : "檢查設定")
+                        </button>
+                    </div>
+                }
+            }
+
+            <div class="modal-foot">
+                <span class="muted picker-choice">@(_copied is null ? "" : "已複製到剪貼簿")</span>
+                <button class="btn" @onclick="CheckAll" disabled="@Health.Statuses.Any(s => s.IsChecking)">重新檢查全部</button>
+                <button class="btn primary" @onclick="Close">關閉</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public LoopConfig Settings { get; set; } = new();
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private readonly HashSet<AgentBackend> _expanded = [];
+    private string? _copied;
+    private bool _wasVisible;
+
+    private sealed record Step(string Text, string? Command = null);
+
+    public static string Name(AgentBackend backend) => backend switch
+    {
+        AgentBackend.ClaudeCode => "Claude",
+        AgentBackend.Antigravity => "Google",
+        _ => "GH Copilot"
+    };
+
+    protected override void OnInitialized() => Health.Changed += OnHealthChanged;
+
+    protected override void OnParametersSet()
+    {
+        // The free setup checks run in the background every time the dialog opens.
+        if (Visible && !_wasVisible)
+        {
+            _copied = null;
+            _ = Health.CheckAllAsync(Settings);
+        }
+        _wasVisible = Visible;
+    }
+
+    private void OnHealthChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private void Toggle(AgentBackend backend)
+    {
+        if (!_expanded.Remove(backend)) _expanded.Add(backend);
+    }
+
+    private Task Recheck(AgentBackend backend) => Health.CheckAsync(backend, Settings);
+
+    private Task CheckAll() => Health.CheckAllAsync(Settings);
+
+    private Task Verify(AgentBackend backend) => Health.VerifyAsync(backend, Settings);
+
+    private async Task Copy(string text)
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+            _copied = text;
+        }
+        catch (JSException) { _copied = null; }
+    }
+
+    private Task Close() => OnClose.InvokeAsync();
+
+    private IEnumerable<Step> Steps(AgentBackend backend) => backend switch
+    {
+        AgentBackend.Copilot =>
+        [
+            new("到 github.com/settings/personal-access-tokens 建立 Fine-grained token，Resource owner 選你的個人帳號。"),
+            new("Repository access 選「Public repositories」（Copilot Requests 只在這個選項下出現），Permissions → Account → Add permissions → 勾選 Copilot Requests。"),
+            new($"複製產生的 token（github_pat_ 開頭），在 PowerShell 執行下列指令存進 {Settings.TokenEnvironmentVariable}，token 不會留在指令歷史：",
+                $"[Environment]::SetEnvironmentVariable(\"{Settings.TokenEnvironmentVariable}\", (Get-Clipboard).Trim(), \"User\")"),
+            new("回到這裡按「檢查設定」。")
+        ],
+        AgentBackend.ClaudeCode =>
+        [
+            new("確認已安裝 Claude Code（上方會顯示是否找到 claude 執行檔）。"),
+            new("在 PowerShell 執行下列指令，用瀏覽器授權你的 Claude 訂閱帳號：", "claude setup-token"),
+            new($"複製 sk-ant-oat01- 開頭的 token，執行下列指令存進 {Settings.ClaudeTokenEnvironmentVariable}：",
+                $"[Environment]::SetEnvironmentVariable(\"{Settings.ClaudeTokenEnvironmentVariable}\", (Get-Clipboard).Trim(), \"User\")"),
+            new("回到這裡按「檢查設定」。")
+        ],
+        _ =>
+        [
+            new("安裝 Google Antigravity CLI（agy）。"),
+            new("在終端機執行下列指令，用你的 Google 帳號（AI Pro / Ultra）登入一次：", "agy"),
+            new("登入完成後關掉 agy，回到這裡按「檢查設定」。agy 沒有 token 參數，會使用它自己儲存的登入。")
+        ]
+    };
+
+    public void Dispose() => Health.Changed -= OnHealthChanged;
+}

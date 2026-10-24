@@ -85,6 +85,27 @@ without leaving it in your shell history:
 [Environment]::SetEnvironmentVariable("CLAUDE_LOOP_TOKEN", (Get-Clipboard).Trim(), "User")
 ```
 
+### Model check (模型檢查)
+
+The **模型檢查** button (top right) opens a dialog with one row per backend:
+
+| | Setup (已設置 / 未設置) | Verification (已驗證 / 未驗證) |
+|---|---|---|
+| Meaning | Credentials and CLI in place (free check) | A minimal prompt on the cheapest model succeeded (costs a tiny amount) |
+| GH Copilot | token variable set | |
+| Claude | token variable set and `claude` found | |
+| Google | `agy` found and signed in (`agy models` lists models) | |
+
+Colors: 已設置 green / 未設置 blue; 已驗證 green, 未驗證 blue when set up, gray (disabled) when not.
+The setup checks run in the background when the page loads and when the dialog opens. Clicking
+**未設置** shows step-by-step setup instructions with copyable commands and a **檢查設定** button;
+clicking **未驗證** runs the minimal prompt. A verification is remembered in
+`App_Data/backend-verification.json` as a credential fingerprint (a hash, never the token) and is
+dropped when the token, CLI or sign-in changes.
+
+Only backends that are set up **and** verified can be chosen for the worker, the evaluator and the
+AGENTS.md writer; a saved configuration that uses another backend is blocked at Start.
+
 ## Model
 
 The **Model** dropdown lists the models your account can use (from the SDK's `ListModelsAsync`,

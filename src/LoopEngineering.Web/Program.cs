@@ -25,6 +25,10 @@ builder.Services.AddSingleton<AccountQuotaService>();
 builder.Services.AddSingleton<IModelCatalogSource>(sp => sp.GetRequiredService<CopilotAccountSource>());
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<LoopEngineering.Core.Antigravity.AntigravityModelCatalog>();
+builder.Services.AddSingleton(sp => new LoopEngineering.Core.Health.BackendHealthService(
+    Path.Combine(sp.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "backend-verification.json"),
+    sp.GetRequiredService<ModelCatalogService>(),
+    sp.GetRequiredService<LoopEngineering.Core.Antigravity.AntigravityModelCatalog>()));
 builder.Services.AddHostedService<QuotaRefreshWorker>();
 builder.Services.AddSingleton(sp =>
     new CreditLedger(Path.Combine(sp.GetRequiredService<IWebHostEnvironment>().ContentRootPath, "App_Data", "credit-ledger.json")));

@@ -7,6 +7,7 @@
 @inject AccountQuotaService Quota
 @inject ModelCatalogService Models
 @inject AntigravityModelCatalog AgyModels
+@inject BackendHealthService Health
 
 <PageTitle>Loop Engineering</PageTitle>
 
@@ -15,6 +16,9 @@
     <span class="status-pill @StatusClass(_snap.Status)">@StatusText(_snap.Status)</span>
     <div class="spacer"></div>
     <QuotaBadge />
+    <button class="btn check-btn" @onclick="() => _checkVisible = true" title="檢查 Claude、GH Copilot、Google 是否已設置並驗證">
+        模型檢查 @(Health.Statuses.Count(st => st.IsUsable))/@Health.Statuses.Count
+    </button>
     @if (_snap.IsActive)
     {
         <button class="btn danger" @onclick="Stop" disabled="@(_snap.Status == RunStatus.Stopping)">■ Stop</button>
@@ -155,9 +159,9 @@
                 <h3>Worker</h3>
                 <label>Runs on
                     <select @bind="_config.WorkerBackend" @bind:after="OnBackendsChanged">
-                        <option value="@AgentBackend.Copilot">GitHub Copilot</option>
-                        <option value="@AgentBackend.ClaudeCode">Claude Code</option>
-                        <option value="@AgentBackend.Antigravity">Antigravity (Google)</option>
+                        <option value="@AgentBackend.Copilot" disabled="@(!Health.IsUsable(AgentBackend.Copilot))">GitHub Copilot@(BackendSuffix(AgentBackend.Copilot))</option>
+                        <option value="@AgentBackend.ClaudeCode" disabled="@(!Health.IsUsable(AgentBackend.ClaudeCode))">Claude Code@(BackendSuffix(AgentBackend.ClaudeCode))</option>
+                        <option value="@AgentBackend.Antigravity" disabled="@(!Health.IsUsable(AgentBackend.Antigravity))">Antigravity (Google)@(BackendSuffix(AgentBackend.Antigravity))</option>
                     </select>
                 </label>
                 <ModelPicker Label="Model" @bind-Model="_config.Model" @bind-Effort="_config.ReasoningEffort"
@@ -170,9 +174,9 @@
                 <h3>Evaluator</h3>
                 <label>Runs on
                     <select @bind="_config.EvaluatorBackend" @bind:after="OnBackendsChanged">
-                        <option value="@AgentBackend.Copilot">GitHub Copilot</option>
-                        <option value="@AgentBackend.ClaudeCode">Claude Code</option>
-                        <option value="@AgentBackend.Antigravity">Antigravity (Google)</option>
+                        <option value="@AgentBackend.Copilot" disabled="@(!Health.IsUsable(AgentBackend.Copilot))">GitHub Copilot@(BackendSuffix(AgentBackend.Copilot))</option>
+                        <option value="@AgentBackend.ClaudeCode" disabled="@(!Health.IsUsable(AgentBackend.ClaudeCode))">Claude Code@(BackendSuffix(AgentBackend.ClaudeCode))</option>
+                        <option value="@AgentBackend.Antigravity" disabled="@(!Health.IsUsable(AgentBackend.Antigravity))">Antigravity (Google)@(BackendSuffix(AgentBackend.Antigravity))</option>
                     </select>
                 </label>
                 @{ var evaluatorInherits = _config.EvaluatorBackend == _config.WorkerBackend; }
@@ -216,9 +220,9 @@
                     <label>Runs on
                         <select @bind="_config.AgentsMdBackend" @bind:after="OnBackendsChanged">
                             <option value="@AgentsMdBackendChoice.SameAsEvaluator">Same as evaluator</option>
-                            <option value="@AgentsMdBackendChoice.Copilot">GitHub Copilot</option>
-                            <option value="@AgentsMdBackendChoice.ClaudeCode">Claude Code</option>
-                            <option value="@AgentsMdBackendChoice.Antigravity">Antigravity (Google)</option>
+                            <option value="@AgentsMdBackendChoice.Copilot" disabled="@(!Health.IsUsable(AgentBackend.Copilot))">GitHub Copilot@(BackendSuffix(AgentBackend.Copilot))</option>
+                            <option value="@AgentsMdBackendChoice.ClaudeCode" disabled="@(!Health.IsUsable(AgentBackend.ClaudeCode))">Claude Code@(BackendSuffix(AgentBackend.ClaudeCode))</option>
+                            <option value="@AgentsMdBackendChoice.Antigravity" disabled="@(!Health.IsUsable(AgentBackend.Antigravity))">Antigravity (Google)@(BackendSuffix(AgentBackend.Antigravity))</option>
                         </select>
                     </label>
                     var guideBackend = _config.BackendFor(RoundPhase.Guide);
@@ -440,6 +444,8 @@
     </section>
 </main>
 
+<ModelCheckDialog Visible="_checkVisible" Settings="_config" OnClose="() => _checkVisible = false" />
+
 <PathPicker Visible="_pickerVisible" Mode="_pickerMode" Title="@_pickerTitle" InitialPath="@_pickerInitial"
             OnSelected="OnPicked" OnCancel="() => _pickerVisible = false" />
 
@@ -473,6 +479,9 @@
         RefreshClaudeStatus();
         AgyModels.Changed += OnModelsChanged;
         OnAntigravitySettingsChanged();
+        Health.Changed += OnHealthChanged;
+        // Free setup checks in the background so the selectors know which backends can be picked.
+        _ = Health.CheckAllAsync(_config);
         Quota.TokenVariable = _config.TokenEnvironmentVariable;
         if (_tokenFound && Quota.Current.FetchedAt is null) _ = Quota.RefreshAsync(force: false);
         Models.Changed += OnModelsChanged;
@@ -525,6 +534,13 @@
             RefreshClaudeStatus();
             if (!_claudeTokenFound) _errors.Add($"Environment variable '{_config.ClaudeTokenEnvironmentVariable}' is not set (Claude token from `claude setup-token`).");
             if (_claudeCliError is not null) _errors.Add(_claudeCliError);
+        }
+        foreach (var (role, phase) in new[] { ("Worker", RoundPhase.Worker), ("Evaluator", RoundPhase.Evaluator), ("AGENTS.md", RoundPhase.Guide) })
+        {
+            if (phase == RoundPhase.Guide && !_config.UseAgentsMd) continue;
+            var backend = _config.BackendFor(phase);
+            if (!Health.IsUsable(backend))
+                _errors.Add($"{role} 使用 {ModelCheckDialog.Name(backend)}，但它尚未設置或驗證。請先按右上角「模型檢查」完成驗證，或改選其他後端。");
         }
         if (_config.UsesBackend(AgentBackend.Antigravity))
         {
@@ -579,6 +595,18 @@
             _errors = [ex.Message];
         }
         _snap = Runner.GetSnapshot();
+    }
+
+    // ---------- model check ----------
+
+    private bool _checkVisible;
+
+    private void OnHealthChanged() => _ = InvokeAsync(StateHasChanged);
+
+    private string BackendSuffix(AgentBackend backend)
+    {
+        var status = Health.Get(backend);
+        return status.IsUsable ? "" : status.IsChecking ? "（檢查中…）" : status.IsConfigured ? "（未驗證）" : "（未設置）";
     }
 
     private void Stop()
@@ -842,6 +870,7 @@
         Runner.Changed -= OnRunnerChanged;
         Models.Changed -= OnModelsChanged;
         AgyModels.Changed -= OnModelsChanged;
+        Health.Changed -= OnHealthChanged;
         _refreshTimer?.Dispose();
     }
 }
